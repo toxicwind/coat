@@ -63,6 +63,22 @@ Write-Output "OK:$path"
 `;
 
 /**
+ * Read the current Windows desktop wallpaper path (the Wallpaper registry value
+ * we set via SPI). Empty string when none or not Windows.
+ */
+export function getCurrentWallWindows(): string | null {
+  if (process.platform !== "win32") return null;
+  try {
+    const out = Bun.spawnSync(["reg", "query", `HKCU\\Control Panel\\Desktop`, "/v", "Wallpaper"], { stdout: "pipe" }).stdout.toString();
+    const m = out.match(/Wallpaper\s+REG_SZ\s+(.+)\s*$/m);
+    const wall = m?.[1]?.trim();
+    return wall && existsSync(wall) ? wall : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Set the Windows desktop wallpaper to an absolute image path.
  * Resolves on Windows only; throws on other platforms.
  *

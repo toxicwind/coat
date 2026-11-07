@@ -9,6 +9,9 @@ HTTP daemon on `:25240`:
 ```
 GET  /status            daemon + last-wall state
 POST /rotate            rotate the wall now
+POST /save              save the CURRENT desktop wallpaper to history (Windows)
+GET  /tags              current e621 search (default "male/male score:>80 -sexual -gore -comic")
+POST /tags              set/search tags: {"tags":"..."} | {"add":[...]} | {"remove":[...]}
 ```
 
 ## Rotation lanes
@@ -42,6 +45,27 @@ scripts\wallchanger.cmd run     :: build if missing, then start the tray rotator
 > (fetch + set via the native TS setter) has **no** dotnet dependency — only the
 > optional persistent tray cycler needs it. Grab it from
 > <https://dotnet.microsoft.com/download/dotnet/10.0>.
+
+### Native tray tool (no dotnet)
+
+For saving-to-history and rotating from the system tray, run the PowerShell tray
+(works on any Windows box, no compile):
+
+```bat
+scripts\coat-tray.cmd            :: start the tray icon
+```
+
+Right-click the "coat" tray icon for:
+
+- **Rotate now** — fresh e621 wall (set + archive)
+- **Search / set tags…** — type e621 tag syntax to search (e.g. `male/male score:>80
+  -sexual`); it sets the daemon's tags and asks if you want to rotate with them
+- **Save current to history** — snapshot whatever is on screen into the archive
+- **Open history folder** — explore `pens/kelpie/docs/wallpaper-archive`
+- **Restart daemon** — ensure `:25240` is up
+
+Default search is **`male/male score:>80 -sexual -gore -comic`** (multi-male SFW).
+Change it any time via the tray "Tags…" dialog, `POST /tags`, or `COAT_E621_TAGS`.
 
 coat keeps `%LocalAppData%\WallpaperSlideshow\config.json` pointed at
 `%USERPROFILE%\Wallpapers` (see `syncWallchangerConfig()` in `src/index.ts`).
