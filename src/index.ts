@@ -31,7 +31,7 @@ mkdirSync(ARCHIVE, { recursive: true });
 mkdirSync(STATE, { recursive: true });
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[coat]", ...a);
 
-interface CoatState { lastRotate: string | null; lastWall: string | null; rotates: number; lastError: string | null; tags: string }
+interface CoatState { lastRotate: string | null; lastWall: string | null; rotates: number; lastError: string | null; tags: string; intervalHours: number }
 const statePath = join(STATE, "state.json");
 const loaded = existsSync(statePath) ? (JSON.parse(readFileSync(statePath, "utf8")) as Partial<CoatState>) : {};
 const state: CoatState = {
@@ -40,8 +40,27 @@ const state: CoatState = {
   rotates: loaded.rotates ?? 0,
   lastError: loaded.lastError ?? null,
   tags: loaded.tags ?? DEFAULT_TAGS,
+  intervalHours: loaded.intervalHours ?? Number(process.env.COAT_ROTATE_HOURS ?? 24),
 };
 const persist = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+/**
+ * Rotation scheduler. Rebuilds the Cron to fire every `hours` hours on the hour
+ * (e.g. 3/6/12), clearing the previous one, so the tray can change the interval
+ * live without a daemon restart. Disabled when COAT_NO_CRON.
+ */
+let rotateCron: Cron | null = null;
+
+function setIntervalHours(hours: number) {
+  const h = Math.max(1, Math.round(hours));
+  state.intervalHours = h;
+  persist();
+  rotateCron?.stop();
+  rotateCron = null;
+  if (process.env.COAT_NO_CRON) return;
+  rotateCron = new Cron(`0 */${h} * * *`, { name: "e621-rotate" }, () => void rotateWall());
+  log("interval updated", { hours: h, cron: `0 */${h} * * *` });
+}
 
 /** Still-image extensions Windows SPI renders reliably (jpg/png/bmp). webp/gif
  *  slip through the API but set BLACK — excluded here. */
@@ -142,13 +161,13 @@ async function rotateWall() {
     if (IS_WIN) {
       // Native lane: no bash/ww dependency. Fetch + set via Win32 SPI.
       fetched = await fetchE621Wall();
-      // Center on the single (horizontal) monitor: same-aspect walls -> cover
-      // (Fill), different aspect -> contain (Fit). No aspect data -> Fill.
+      // Correct scaling on the single (horizontal) monitor: smaller walls center
+      // at native size, same-aspect walls fill/cover, mismatched contain/fit.
       const { w: monW, h: monH } = getWindowsDesktopSize();
       const dims = imageDimensions(fetched);
-      const style = dims ? pickFitStyle(dims.w, dims.h, monW, monH) : "Fill";
-      log("windows fit", { dims, monitor: `${monW}x${monH}`, style });
-      setWall = (p: string) => setWallWindows(p, { style });
+      const fit = dims ? pickFitStyle(dims.w, dims.h, monW, monH) : { style: "Fill" as const, tile: "0" as const };
+      log("windows fit", { dims, monitor: `${monW}x${monH}`, style: fit.style, tile: fit.tile });
+      setWall = (p: string) => setWallWindows(p, { style: fit.style, tile: fit.tile === "1" });
     } else {
       const proc = Bun.spawn(["bash", E621_SCRIPT], { stdout: "pipe", stderr: "pipe", env: { ...process.env, QUICKSHELL_CONFIG_NAME: "ww" } });
       const err = await new Response(proc.stderr).text();
@@ -189,8 +208,17 @@ const server = Bun.serve({
   port: PORT,
   fetch(req) {
     const p = new URL(req.url).pathname;
-    if (p === "/status") return Response.json({ ...state, port: PORT, cron: ROTATE_CRON, archive: ARCHIVE });
+    if (p === "/status") return Response.json({ ...state, port: PORT, cron: rotateCron ? `0 */${state.intervalHours} * * *` : ROTATE_CRON, archive: ARCHIVE });
     if (p === "/rotate" && req.method === "POST") return rotateWall().then((r) => Response.json(r, { status: r.ok ? 200 : 500 }));
+    if (p === "/interval" && req.method === "POST") {
+      return req.json().then((raw) => {
+        const b = (raw ?? {}) as { hours?: number };
+        const h = Number(b.hours);
+        if (!h || !Number.isFinite(h)) return Response.json({ ok: false, error: "hours required (3 | 6 | 12 | …)" }, { status: 400 });
+        setIntervalHours(h);
+        return Response.json({ ok: true, intervalHours: state.intervalHours, cron: `0 */${state.intervalHours} * * *` });
+      });
+    }
     if (p === "/save" && req.method === "POST") { const r = saveCurrentWall(); return Response.json(r, { status: r.ok ? 200 : 400 }); }
     if (p === "/tags" && req.method === "GET") return Response.json({ tags: state.tags });
     if (p === "/tags" && req.method === "POST") {
@@ -217,8 +245,5 @@ const server = Bun.serve({
   },
 });
 
-if (!process.env.COAT_NO_CRON) {
-  new Cron(ROTATE_CRON, { name: "e621-rotate" }, () => void rotateWall());
-  log("cron scheduled", ROTATE_CRON);
-}
-log(`coat up: http://127.0.0.1:${PORT} (the wallpaper lane)`);
+setIntervalHours(state.intervalHours); // schedules cron if not COAT_NO_CRON, else no-op
+log(`coat up: http://127.0.0.1:${PORT} (the wallpaper lane) · rotate every ${state.intervalHours}h`);

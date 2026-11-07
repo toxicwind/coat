@@ -49,18 +49,62 @@ function Ensure-Daemon {
 # Context menu
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $miRotate = New-Object System.Windows.Forms.ToolStripMenuItem("Rotate now")
+$miInterval = New-Object System.Windows.Forms.ToolStripMenuItem("Auto-rotate every…")
 $miTags   = New-Object System.Windows.Forms.ToolStripMenuItem("Search / set tags…")
 $miSave   = New-Object System.Windows.Forms.ToolStripMenuItem("Save current to history")
 $miOpen   = New-Object System.Windows.Forms.ToolStripMenuItem("Open history folder")
 $miDash   = New-Object System.Windows.Forms.ToolStripMenuItem("Restart daemon")
 $miExit   = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
-$menu.Items.AddRange(@($miRotate, $miTags, $miSave, $miOpen, $miDash, $miExit))
+
+# Interval submenu — radio-checked 3h/6h/12h (+ Off, 1h, 24h). Selecting posts
+# POST /interval to rewire the daemon cron live.
+$ivMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Auto-rotate every…")
+$ivOff  = New-Object System.Windows.Forms.ToolStripMenuItem("Off")
+$iv1h   = New-Object System.Windows.Forms.ToolStripMenuItem("1 hour")
+$iv3h   = New-Object System.Windows.Forms.ToolStripMenuItem("3 hours")
+$iv6h   = New-Object System.Windows.Forms.ToolStripMenuItem("6 hours")
+$iv12h  = New-Object System.Windows.Forms.ToolStripMenuItem("12 hours")
+$iv24h  = New-Object System.Windows.Forms.ToolStripMenuItem("24 hours")
+$ivMenu.DropDownItems.AddRange(@($ivOff, $iv1h, $iv3h, $iv6h, $iv12h, $iv24h))
+
+$menu.Items.AddRange(@($miRotate, $ivMenu, $miTags, $miSave, $miOpen, $miDash, $miExit))
 
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 function Show-Balloon($title, $text) {
   $n.ShowBalloonTip(2500, $title, $text, [System.Windows.Forms.ToolTipIcon]::Info)
 }
+
+function Get-IntervalHours {
+  try {
+    $s = Invoke-RestMethod -Uri "$Base/status" -Method GET -TimeoutSec 5
+    return [int]$s.intervalHours
+  } catch { return -1 }
+}
+
+function Set-IntervalHours([int]$hours) {
+  try {
+    $body = @{ hours = $hours } | ConvertTo-Json
+    $r = Invoke-RestMethod -Uri "$Base/interval" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 5
+    Show-Balloon "coat · auto-rotate" ("every {0} hour(s)" -f $r.intervalHours)
+    return $true
+  } catch {
+    Show-Balloon "coat · auto-rotate" "failed: $_"
+    return $false
+  }
+}
+
+# Check the current interval so the right radio is selected on open
+$curIv = Get-IntervalHours
+$ivMap = @{ 0 = $ivOff; 1 = $iv1h; 3 = $iv3h; 6 = $iv6h; 12 = $iv12h; 24 = $iv24h }
+if ($ivMap.ContainsKey($curIv)) { $ivMap[$curIv].Checked = $true }
+
+$ivOff.Add_Click({ if (Set-IntervalHours 0) { $ivOff.Checked=$true } })
+$iv1h.Add_Click({  if (Set-IntervalHours 1) { $iv1h.Checked=$true } })
+$iv3h.Add_Click({  if (Set-IntervalHours 3) { $iv3h.Checked=$true } })
+$iv6h.Add_Click({  if (Set-IntervalHours 6) { $iv6h.Checked=$true } })
+$iv12h.Add_Click({ if (Set-IntervalHours 12) { $iv12h.Checked=$true } })
+$iv24h.Add_Click({ if (Set-IntervalHours 24) { $iv24h.Checked=$true } })
 
 function Get-CurrentTags {
   try {

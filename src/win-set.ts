@@ -63,24 +63,39 @@ export function imageDimensions(path: string): { w: number; h: number } | null {
   }
 }
 
+export interface WallFit {
+  style: WallStyle;
+  /** TileWallpaper registry value ('0' / '1'); tile only used for Center. */
+  tile: "0" | "1";
+}
+
 /**
- * Pick the Windows wallpaper style so a wall is centered correctly on a single
- * monitor. Same aspect → Fill (cover, full bleed, no distortion); different
- * aspect → Fit (contain, whole image centered with bars). Falls back on Fill
- * when dimensions/monitor are unknown. Monitor size is passed explicitly (the
- * daemon detects it via the desktop virtual-screen metrics).
+ * Pick the correct Windows scaling for a wall on the (single) monitor:
+ *  - genuinely small art (<75% of monitor on both axes) -> CENTRE at native size
+ *    (no ugly upscaling; the art sits pixel-for-pixel in the middle).
+ *  - portrait / very tall post                         -> FIT (contain, whole art
+ *    visible, centred with side bars — never cropped).
+ *  - otherwise (landscape/square, big enough)          -> FILL (cover, fills the
+ *    whole screen; only the small aspect difference is cropped).
+ * Returns {style, tile}. Falls back to {Fill,'0'} when dimensions unknown.
  */
-export function pickFitStyle(imgW: number, imgH: number, monW = 0, monH = 0): WallStyle {
-  if (!imgW || !imgH || !monW || !monH) return "Fill";
-  const imgA = imgW / imgH;
-  const monA = monW / monH;
-  // within 3% of the monitor aspect => cover
-  return Math.abs(imgA - monA) / monA < 0.03 ? "Fill" : "Fit";
+export function pickFitStyle(imgW: number, imgH: number, monW = 0, monH = 0): WallFit {
+  if (!imgW || !imgH || !monW || !monH) return { style: "Fill", tile: "0" };
+  // Genuinely small (<75% of monitor on both axes): native-size CENTRE, no upscale.
+  if (imgW < monW * 0.75 && imgH < monH * 0.75) return { style: "Center", tile: "0" };
+  // Portrait / very tall post that would crop heavily when filled -> FIT (contain):
+  // whole art visible, centred with side bars.
+  if (imgH > imgW && imgH >= monH) return { style: "Fit", tile: "0" };
+  // Otherwise (landscape or square, big enough) -> FILL (cover): crop the small
+  // aspect difference and fill the whole screen. Handles 1920x1080/2560x1600 etc.
+  return { style: "Fill", tile: "0" };
 }
 
 interface WinSetOpts {
   /** WallpaperStyle registry value name ("Fill", "Fit", "Stretch", "Tile", "Center", "Span"). */
   style?: WallStyle;
+  /** TileWallpaper registry value ('0' off, '1' on). Useful with Center. */
+  tile?: boolean;
   /** If true, wallpaper may exceed monitor bounds (Span) when style is Fit/Fill. */
   span?: boolean;
   /** Timeout for the child powershell, ms. */
@@ -113,8 +128,9 @@ try {
   $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Control Panel\\Desktop', $true)
   if ($key) {
     $real = if ($env:COAT_STYLE) { $env:COAT_STYLE } else { '10' }
+    $tile = if ($env:COAT_TILE) { $env:COAT_TILE } else { '0' }
     $key.SetValue('WallpaperStyle', $real, [Microsoft.Win32.RegistryValueKind]::String)
-    $key.SetValue('TileWallpaper', '0', [Microsoft.Win32.RegistryValueKind]::String)
+    $key.SetValue('TileWallpaper', $tile, [Microsoft.Win32.RegistryValueKind]::String)
     $key.Close()
   }
 } catch { }
@@ -164,7 +180,7 @@ export function setWallWindows(wallPath: string, opts?: WinSetOpts): Promise<str
   const child = spawn(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps],
-    { env: { ...process.env, COAT_WALL: full, COAT_STYLE: style }, windowsHide: true },
+    { env: { ...process.env, COAT_WALL: full, COAT_STYLE: style, COAT_TILE: opts?.tile ? "1" : "0" }, windowsHide: true },
   );
 
   let out = "";
