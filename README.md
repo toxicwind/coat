@@ -10,7 +10,7 @@ HTTP daemon on `:25240`:
 GET  /status            daemon + last-wall state
 POST /rotate            rotate the wall now
 POST /save              save the CURRENT desktop wallpaper to history (Windows)
-GET  /tags              current e621 search (default "male/male score:>80 -sexual -gore -comic")
+GET  /tags              current e621 search (default "male/male score:>80 -gore -comic")
 POST /tags              set/search tags: {"tags":"..."} | {"add":[...]} | {"remove":[...]}
 ```
 
@@ -46,18 +46,22 @@ scripts\wallchanger.cmd run     :: build if missing, then start the tray rotator
 > optional persistent tray cycler needs it. Grab it from
 > <https://dotnet.microsoft.com/download/dotnet/10.0>.
 
-### Native tray tool (no dotnet)
+## Windows app — single Electron shell (SSOT)
 
-For saving-to-history and rotating from the system tray, run the PowerShell tray
-(works on any Windows box, no compile):
+On Windows coat is ONE app: an **Electron shell** (`electron/`) that owns the tray,
+spawns the daemon as a hidden no-console child (via `daemon.bat` on a `cmd /c` host
+with `windowsHide`, which libuv maps to `CREATE_NO_WINDOW` — no console window ever
+appears), auto-launches at login, and shows the generated fur-knot mark.
 
-```bat
-scripts\coat-tray.cmd            :: start the tray icon
+```bash
+bun run app    # launch the Electron app (tray + auto-start daemon + login)
+bun run dist   # build the windowed installer: electron/dist/coat-setup.exe
 ```
 
 Right-click the "coat" tray icon for:
 
-- **Rotate now** — fresh e621 wall (set + archive)
+- **Rotate now** — fresh e621 wall (set + archive); guaranteed to pick a settable
+  still image even when a strict tag page is empty (tested in `src/rotate-utils.test.ts`)
 - **Auto-rotate every…** — pick **3h / 6h / 12h** (also 1h/24h/Off); re-schedules the
   daemon cron live (persisted, shown in `/status`)
 - **Search / set tags…** — type e621 tag syntax to search (e.g. `male/male score:>80`);
@@ -66,8 +70,9 @@ Right-click the "coat" tray icon for:
 - **Open history folder** — explore `pens/kelpie/docs/wallpaper-archive`
 - **Restart daemon** — ensure `:25240` is up
 
-The rotation interval is also settable via `POST /interval {"hours": N}` or started
-from `COAT_ROTATE_HOURS`.
+> The old PowerShell tray (`scripts/coat-tray.ps1/.cmd`) is **removed** — Electron is
+> the sole tray owner. The rotation interval is settable via `POST /interval {"hours": N}`
+> or `COAT_ROTATE_HOURS`.
 
 Default search is **`male/male score:>80 -gore -comic`** (multi-male, NSFW allowed).
 Change it any time via the tray "Tags…" dialog, `POST /tags`, or `COAT_E621_TAGS`.
@@ -100,9 +105,8 @@ fork under `toxicwind/wallchanger` when you need the rotator itself to grow.
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `COAT_PORT` | `25240` | HTTP daemon port |
-| `COAT_ROTATE_CRON` | `0 21 * * *` | cron schedule for auto-rotate |
-| `COAT_E621_TAGS` | `male score:>80 -sexual -gore -comic` | e621 search (Windows lane) |
-| `COAT_E621_MIN_SCORE` | `80` | minimum score filter (Windows lane) |
+| `COAT_ROTATE_HOURS` | `24` | default auto-rotate interval (hours) |
+| `COAT_E621_TAGS` | `male/male score:>80 -gore -comic` | default e621 search |
 | `COAT_WALLCHANGER_MIN` | `30` | wallchanger rotation interval (minutes) |
 | `COAT_NO_CRON` | — | set to skip scheduling the cron |
 
@@ -111,9 +115,14 @@ fork under `toxicwind/wallchanger` when you need the rotator itself to grow.
 ```bash
 bun install
 bun run typecheck   # tsc --noEmit
-bun run rotate      # rotate once
-bun run start       # daemon + cron
+bun test            # TDD gate — rotate-selection contract (src/rotate-utils.test.ts)
+bun run daemon      # headless daemon + cron (:25240)
+bun run app         # Electron app (tray + hidden daemon + auto-launch)
+bun run dist        # windowed installer (electron/dist/coat-setup.exe)
 ```
+
+Keep the pure rotate logic (`src/rotate-utils.ts`) tested when you change it —
+the tray "Rotate now" contract lives in those tests.
 
 ## License
 

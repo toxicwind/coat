@@ -10,7 +10,9 @@
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "rotate": "bun run src/index.ts --rotate",
+    "daemon": "bun run src/index.ts",
+    "app": "npm --prefix electron start",
+    "dist": "npm --prefix electron run dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

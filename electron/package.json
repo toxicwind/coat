@@ -20,17 +20,21 @@
     "extraResources": [
       { "from": "../src", "to": "daemon/src" },
       { "from": "../package.json", "to": "daemon/package.json" },
-      { "from": "../bun.lock", "to": "daemon/bun.lock", "filter": ["*"] }
+      { "from": "../bun.lock", "to": "daemon/bun.lock", "filter": ["*"] },
+      { "from": "icon.png", "to": "icon.png" }
     ],
     "win": {
       "target": "nsis",
+      "icon": "icon.ico",
       "artifactName": "coat-setup.exe"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": false,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
     }
   }
 }

@@ -13,6 +13,7 @@ import { Cron } from "croner";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle } from "./win-set";
+import { buildTagCandidates, pickFirstUsable, type E621Post } from "./rotate-utils";
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const HOME = process.env.HOME ?? "";
@@ -62,26 +63,23 @@ function setIntervalHours(hours: number) {
   log("interval updated", { hours: h, cron: `0 */${h} * * *` });
 }
 
-/** Still-image extensions Windows SPI renders reliably (jpg/png/bmp). webp/gif
- *  slip through the API but set BLACK — excluded here. */
-const STILL_EXTS: Record<string, true> = { jpg: true, jpeg: true, png: true, bmp: true };
-
 /**
  * Windows: fetch a fresh e621 post via the JSON API and write it to WALLS_DIR.
- * If the strict tag search returns nothing (e621 transient / empty page), retry
- * with `score:>` constraints stripped so the lane always yields a wall.
+ * Uses the tested rotate-utils logic: only still images (jpg/png/bmp) are
+ * picked, and if a strict tag query returns an empty page, it falls back to the
+ * score-stripped candidate so the rotate button never comes back dead.
  */
 async function fetchE621Wall(): Promise<string> {
-  const candidates = [state.tags, state.tags.replace(/\bscore:>\d+\b/g, "")].filter((t, i, a) => t.trim() && a.indexOf(t) === i);
+  const candidates = buildTagCandidates(state.tags);
   let lastErr = "no usable e621 post (bad tags/rating?)";
   for (const tags of candidates) {
     try {
       const url = `https://e621.net/posts.json?limit=8&tags=${encodeURIComponent(`${tags} order:random`)}`;
       const res = await fetch(url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
       if (!res.ok) { lastErr = `e621 ${res.status}`; continue; }
-      const body = (await res.json()) as { posts?: Array<{ id?: number; file?: { url?: string; ext?: string }; score?: { total?: number } }> };
-      const post = body.posts?.find((p) => p.file?.url && (p.file.ext ?? "") in STILL_EXTS);
-      if (!post?.file?.url) { lastErr = "no usable e621 post (bad tags/rating?)"; continue; }
+      const body = (await res.json()) as { posts?: E621Post[] };
+      const post = pickFirstUsable(body.posts);
+      if (!post) { lastErr = "no usable e621 post (bad tags/rating?)"; continue; }
       const ext = extname(new URL(post.file.url).pathname) || `.${post.file.ext ?? "jpg"}`;
       const safe = new URL(post.file.url).pathname.split("/").pop()?.replace(/[^\w.\-]+/g, "_") || `wall-${Date.now()}`;
       const name = `${new Date().toISOString().slice(0, 10)}-${safe}`;

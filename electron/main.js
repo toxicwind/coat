@@ -69,12 +69,18 @@ function coat(method, path, body) {
 
 let daemon; // the hidden bun child
 
+/**
+ * Spawn the coat daemon directly, with NO visible console. Electron is a
+ * GUI-subsystem process, so `windowsHide: true` (libuv -> CREATE_NO_WINDOW,
+ * 0x08000000) is the whole story: the console-subsystem bun child owns a hidden
+ * windowless console and never shows a window. No cmd.exe/PowerShell/.bat
+ * indirection — Electron spawns bun itself.
+ */
 function ensureDaemon() {
   if (daemon && !daemon.killed) return;
-  const bunPath = resolveBun();
-  daemon = spawn(bunPath, ["run", "src/index.ts"], {
+  daemon = spawn(resolveBun(), ["run", "src/index.ts"], {
     cwd: resolveCoatDir(),
-    windowsHide: true,          // no console window for the daemon
+    windowsHide: true,          // libuv -> CREATE_NO_WINDOW: hidden windowless console
     detached: true,             // independent of Electron's lifecycle
     stdio: "ignore",
     env: { ...process.env, COAT_PORT: String(PORT) },
@@ -125,12 +131,14 @@ function escapeHtml(s){return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;
 
 function buildTray() {
   const i = new Tray(nativeImage.createEmpty());
-  // Use the app icon if available, else a generated dot.
-  const iconPath = join(__dirname, "..", "icon.ico");
-  const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createFromDataURL(
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJUlEQVR42mNgGAWjYBSMglEwCkbBKBgFo2AUjIJRMAoGAAAFFwABWv8sXQAAAABJRU5ErkJggg==",
-  );
-  i.setImage(icon);
+  // Bundle icon.png as an extraResource so the tray uses the real generated mark.
+  const iconPng = app.isPackaged ? join(process.resourcesPath, "icon.png") : join(__dirname, "..", "..", "electron", "icon.png");
+  const trayIcon = fs.existsSync(iconPng)
+    ? nativeImage.createFromPath(iconPng).resize({ width: 16, height: 16 })
+    : nativeImage.createFromDataURL(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJUlEQVR42mNgGAWjYBSMglEwCkbBKBgFo2AUjIJRMAoGAAAFFwABWv8sXQAAAABJRU5ErkJggg==",
+      );
+  i.setImage(trayIcon);
   i.setToolTip("coat — the wallpaper lane");
 
   const intervalItems = [
