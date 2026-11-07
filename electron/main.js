@@ -9,9 +9,8 @@
  */
 const { app, Tray, Menu, BrowserWindow, nativeImage, dialog } = require("electron");
 const { spawn } = require("child_process");
-const { join, dirname } = require("path");
+const { join } = require("path");
 const { existsSync } = require("fs");
-const os = require("os");
 const http = require("http");
 const fs = require("fs");
 
@@ -33,16 +32,28 @@ function resolveCoatDir() {
 }
 const COAT_DIR = resolveCoatDir();
 
-/** Resolve the bun executable (PATH first, then common installs). */
+/**
+ * Resolve the REAL bun.exe to an absolute path. Spawning the bare name "bun" is
+ * a bug on Windows: it can hit a .cmd/.bat PATHEXT shim, which Electron then
+ * spawns THROUGH cmd.exe — leaking a console/terminal window. Always return a
+ * concrete absolute .exe so the daemon is spawned directly with a hidden console.
+ */
 function resolveBun() {
-  if (process.env.BUN_PATH && existsSync(process.env.BUN_PATH)) return process.env.BUN_PATH;
   const cands = [
-    "bun",
+    process.env.BUN_PATH,
     join(process.env.USERPROFILE || "", ".bun", "bin", "bun.exe"),
-    join(process.env.LOCALAPPDATA || "", "bun", "bun.exe"),
     "C:\\ProgramData\\chocolatey\\bin\\bun.exe",
-  ];
-  return cands.find((c) => c === "bun" || existsSync(c)) || "bun";
+    "C:\\ProgramData\\chocolatey\\lib\\bun\\tools\\bun-windows-x64\\bun.exe",
+    join(process.env.LOCALAPPDATA || "", "bun", "bun.exe"),
+  ].filter(Boolean);
+  for (const c of cands) {
+    if (existsSync(c)) return c;
+  }
+  // Last resort: resolve on PATH but drop any non-.exe (cmd/bat shim) hit.
+  const onPath = require("child_process").execFileSync("where", ["bun"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/);
+  const exe = (onPath || []).find((p) => /\.exe$/i.test(p.trim()));
+  if (exe) return exe.trim();
+  throw new Error("bun executable not found — coat cannot start its daemon");
 }
 
 /** Simple JSON GET/POST to the coat daemon. */
