@@ -12,7 +12,7 @@ import { consola } from "consola";
 import { Cron } from "croner";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
-import { setWallWindows, getCurrentWallWindows } from "./win-set";
+import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle } from "./win-set";
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const HOME = process.env.HOME ?? "";
@@ -24,8 +24,8 @@ const STATE = join(HOME, ".local/state/coat");
 const ROTATE_CRON = process.env.COAT_ROTATE_CRON ?? "0 21 * * *";
 /** Local wall landing dir (kept in sync with the wallchanger config when on Windows). */
 const WALLS_DIR = join(HOME, "Wallpapers");
-/** Windows: e621 search query (default male/male SFW). Managed via GET/POST /tags. */
-const DEFAULT_TAGS = process.env.COAT_E621_TAGS ?? "male/male score:>80 -sexual -gore -comic";
+/** Windows: e621 search query (default male/male, NSFW allowed). Managed via GET/POST /tags. */
+const DEFAULT_TAGS = process.env.COAT_E621_TAGS ?? "male/male score:>80 -gore -comic";
 
 mkdirSync(ARCHIVE, { recursive: true });
 mkdirSync(STATE, { recursive: true });
@@ -43,24 +43,41 @@ const state: CoatState = {
 };
 const persist = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
 
-/** Windows: fetch a fresh e621 post via the JSON API and write it to WALLS_DIR. */
+/** Still-image extensions Windows SPI renders reliably (jpg/png/bmp). webp/gif
+ *  slip through the API but set BLACK — excluded here. */
+const STILL_EXTS: Record<string, true> = { jpg: true, jpeg: true, png: true, bmp: true };
+
+/**
+ * Windows: fetch a fresh e621 post via the JSON API and write it to WALLS_DIR.
+ * If the strict tag search returns nothing (e621 transient / empty page), retry
+ * with `score:>` constraints stripped so the lane always yields a wall.
+ */
 async function fetchE621Wall(): Promise<string> {
-  const url = `https://e621.net/posts.json?limit=1&tags=${encodeURIComponent(state.tags)}`;
-  const res = await fetch(url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
-  if (!res.ok) throw new Error(`e621 ${res.status}`);
-  const body = (await res.json()) as { posts?: Array<{ file?: { url?: string; ext?: string }; score?: { total?: number } }> };
-  const post = body.posts?.find((p) => p.file?.url && p.file.ext !== "webm");
-  if (!post?.file?.url) throw new Error("no usable e621 post (bad tags/rating?)");
-  const ext = extname(new URL(post.file.url).pathname) || `.${post.file.ext ?? "jpg"}`;
-  const safe = new URL(post.file.url).pathname.split("/").pop()?.replace(/[^\w.\-]+/g, "_") || `wall-${Date.now()}`;
-  const name = `${new Date().toISOString().slice(0, 10)}-${safe}`;
-  const out = join(WALLS_DIR, name);
-  const img = await fetch(post.file.url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
-  if (!img.ok) throw new Error(`e621 asset ${img.status}`);
-  const buf = Buffer.from(await img.arrayBuffer());
-  writeFileSync(out, buf);
-  log("fetched", { score: post.score?.total, file: name, bytes: buf.length });
-  return out;
+  const candidates = [state.tags, state.tags.replace(/\bscore:>\d+\b/g, "")].filter((t, i, a) => t.trim() && a.indexOf(t) === i);
+  let lastErr = "no usable e621 post (bad tags/rating?)";
+  for (const tags of candidates) {
+    try {
+      const url = `https://e621.net/posts.json?limit=8&tags=${encodeURIComponent(`${tags} order:random`)}`;
+      const res = await fetch(url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
+      if (!res.ok) { lastErr = `e621 ${res.status}`; continue; }
+      const body = (await res.json()) as { posts?: Array<{ id?: number; file?: { url?: string; ext?: string }; score?: { total?: number } }> };
+      const post = body.posts?.find((p) => p.file?.url && (p.file.ext ?? "") in STILL_EXTS);
+      if (!post?.file?.url) { lastErr = "no usable e621 post (bad tags/rating?)"; continue; }
+      const ext = extname(new URL(post.file.url).pathname) || `.${post.file.ext ?? "jpg"}`;
+      const safe = new URL(post.file.url).pathname.split("/").pop()?.replace(/[^\w.\-]+/g, "_") || `wall-${Date.now()}`;
+      const name = `${new Date().toISOString().slice(0, 10)}-${safe}`;
+      const out = join(WALLS_DIR, name);
+      const img = await fetch(post.file.url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
+      if (!img.ok) { lastErr = `e621 asset ${img.status}`; continue; }
+      const buf = Buffer.from(await img.arrayBuffer());
+      writeFileSync(out, buf);
+      log("fetched", { id: post.id, score: post.score?.total, file: name, bytes: buf.length, tags });
+      return out;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  throw new Error(lastErr);
 }
 
 /**
@@ -99,6 +116,22 @@ function saveCurrentWall() {
   }
 }
 
+/**
+ * Get the Windows desktop virtual-screen size (pixels) — one horizontal monitor
+ * here. Zero-dep: SM_CXVIRTUALSCREEN/SM_CYVIRTUALSCREEN via powershell Add-Type.
+ */
+function getWindowsDesktopSize(): { w: number; h: number } {
+  try {
+    const out = Bun.spawnSync(
+      ["powershell", "-NoProfile", "-Command", "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class VM{[DllImport(\"user32.dll\")]public static extern int GetSystemMetrics(int);}' ; (New-Object VM).GetSystemMetrics(78).ToString()+' '+(New-Object VM).GetSystemMetrics(79)"],
+      { stdout: "pipe" },
+    ).stdout.toString();
+    const [w, h] = out.trim().split(/\s+/).map(Number);
+    if (w && h) return { w, h };
+  } catch { /* fall through */ }
+  return { w: 0, h: 0 };
+}
+
 async function rotateWall() {
   try {
     mkdirSync(WALLS_DIR, { recursive: true });
@@ -109,7 +142,13 @@ async function rotateWall() {
     if (IS_WIN) {
       // Native lane: no bash/ww dependency. Fetch + set via Win32 SPI.
       fetched = await fetchE621Wall();
-      setWall = (p: string) => setWallWindows(p, { style: "Fill" });
+      // Center on the single (horizontal) monitor: same-aspect walls -> cover
+      // (Fill), different aspect -> contain (Fit). No aspect data -> Fill.
+      const { w: monW, h: monH } = getWindowsDesktopSize();
+      const dims = imageDimensions(fetched);
+      const style = dims ? pickFitStyle(dims.w, dims.h, monW, monH) : "Fill";
+      log("windows fit", { dims, monitor: `${monW}x${monH}`, style });
+      setWall = (p: string) => setWallWindows(p, { style });
     } else {
       const proc = Bun.spawn(["bash", E621_SCRIPT], { stdout: "pipe", stderr: "pipe", env: { ...process.env, QUICKSHELL_CONFIG_NAME: "ww" } });
       const err = await new Response(proc.stderr).text();

@@ -14,7 +14,7 @@
  * `powershell -Command` strips $variables on this host.
  */
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -29,6 +29,55 @@ const STYLES: Record<string, string> = {
 
 export type WallStyle = keyof typeof STYLES;
 
+/**
+ * Read a PNG/JPEG/WebP/BMP if only its width/height by parsing the header —
+ * zero dependencies, sub-millisecond. Returns {w,h} or null.
+ */
+export function imageDimensions(path: string): { w: number; h: number } | null {
+  try {
+    const buf = readFileSync(path);
+    // PNG
+    if (buf[0] === 0x89 && buf[1] === 0x50) {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    }
+    // JPEG (scan SOF0/SOF2 markers)
+    if (buf[0] === 0xff && buf[1] === 0xd8) {
+      let i = 2;
+      while (i < buf.length) {
+        if (buf[i] !== 0xff) { i++; continue; }
+        const marker = buf[i + 1];
+        if (marker === 0xc0 || marker === 0xc2) {
+          return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+        }
+        const len = buf.readUInt16BE(i + 2);
+        i += 2 + len;
+      }
+    }
+    // BMP
+    if (buf[0] === 0x42 && buf[1] === 0x4d) {
+      return { w: buf.readInt32LE(18), h: Math.abs(buf.readInt32LE(22)) };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pick the Windows wallpaper style so a wall is centered correctly on a single
+ * monitor. Same aspect → Fill (cover, full bleed, no distortion); different
+ * aspect → Fit (contain, whole image centered with bars). Falls back on Fill
+ * when dimensions/monitor are unknown. Monitor size is passed explicitly (the
+ * daemon detects it via the desktop virtual-screen metrics).
+ */
+export function pickFitStyle(imgW: number, imgH: number, monW = 0, monH = 0): WallStyle {
+  if (!imgW || !imgH || !monW || !monH) return "Fill";
+  const imgA = imgW / imgH;
+  const monA = monW / monH;
+  // within 3% of the monitor aspect => cover
+  return Math.abs(imgA - monA) / monA < 0.03 ? "Fill" : "Fit";
+}
+
 interface WinSetOpts {
   /** WallpaperStyle registry value name ("Fill", "Fit", "Stretch", "Tile", "Center", "Span"). */
   style?: WallStyle;
@@ -39,6 +88,7 @@ interface WinSetOpts {
 }
 
 const SCRIPT = (path: string, style: string) => `
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -48,6 +98,17 @@ public static class CW {
 }
 '@
 $path = [System.IO.Path]::GetFullPath($env:COAT_WALL)
+# Convert to BMP so SPI ALWAYS renders (JPEG/PNG path can go black). Same pixels,
+# BMP is the one format the shell draws reliably. Persist beside the source so the
+# registry path stays valid across reboots (we set from this BMP).
+$wallDir = [System.IO.Path]::GetDirectoryName($path)
+$tmp = [System.IO.Path]::Combine($wallDir, "current-wall.bmp")
+try {
+  $img = [System.Drawing.Image]::FromFile($path)
+  $bmp = New-Object System.Drawing.Bitmap -ArgumentList $img
+  $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Bmp)
+  $img.Dispose(); $bmp.Dispose()
+} catch { throw "bmp convert failed: $_" }
 try {
   $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Control Panel\\Desktop', $true)
   if ($key) {
@@ -57,7 +118,9 @@ try {
     $key.Close()
   }
 } catch { }
-$r = [CW]::SystemParametersInfo(0x0014, 0, $path, 0x01 -bor 0x02)
+$r = [CW]::SystemParametersInfo(0x0014, 0, $tmp, 0x01 -bor 0x02)
+# BMP intentionally kept at <wall dir>/current-wall.bmp so the registry path is
+# stable across reboots; the next rotate overwrites it.
 if ($r -eq 0) { throw "SystemParametersInfo failed (SetLastError=$([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
 Write-Output "OK:$path"
 `;
