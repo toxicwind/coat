@@ -44,6 +44,16 @@
   .tag.a{background:#4a2f3a;color:#eab9d0}
   .tag.s{background:#3a4630;color:#c3e0a8}
   .tag.g{background:#2f2a3a;color:#c9b8e0}
+  .section-title { margin:22px 0 6px; font-size:13px; color:#b89c8a; font-weight:600; letter-spacing:.5px; }
+  .hist { display:flex; flex-direction:column; gap:6px; max-height:240px; overflow:auto; }
+  .hist-row { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; background:#18101a; border:1px solid #2e1c28; }
+  .hist-row:hover { background:#241626; }
+  .hist-thumb { width:52px; height:34px; border-radius:5px; object-fit:cover; background:#120b13; }
+  .hist-info { flex:1; min-width:0; font-size:11.5px; }
+  .hist-info b { color:#e8c89a; }
+  .hist-info .sub { color:#8a7080; font-size:10.5px; }
+  .hist-restore { padding:5px 12px; border-radius:6px; border:1px solid #4a3040; background:#2a1c28; color:#f0e6d8; font-size:11.5px; cursor:pointer; }
+  .hist-restore:hover { background:#3a2636; }
 </style>
 </head>
 <body>
@@ -70,6 +80,9 @@
   </div>
 
   <div class="stat" id="status">loading…</div>
+
+  <div class="section-title">🕘 History</div>
+  <div class="stat" id="history">loading history…</div>
 </div>
 <div class="toast" id="toast"></div>
 <script src="./renderer.js"></script>

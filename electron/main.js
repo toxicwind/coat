@@ -142,6 +142,8 @@ ipcMain.handle("coat:interval", (_e, hours) => coat("POST", "/interval", { hours
 ipcMain.handle("coat:tags", () => coat("GET", "/tags"));
 ipcMain.handle("coat:tags:set", (_e, tags) => coat("POST", "/tags", { tags }).then(r => { broadcastChanged(); return r; }));
 ipcMain.handle("coat:open", async () => { const s = await coat("GET", "/status"); if (s.ok && s.data?.archive) execFile("explorer.exe", [s.data.archive]); return { ok: true }; });
+ipcMain.handle("coat:history", (_e, limit = 50) => coat("GET", `/history?limit=${limit}`));
+ipcMain.handle("coat:restore", (_e, id) => coat("POST", `/history/${id}/restore`).then((r) => { broadcastChanged(); return r; }));
 
 function broadcastChanged() {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send("coat:msg", { type: "changed" });

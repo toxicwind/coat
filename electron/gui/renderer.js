@@ -58,7 +58,34 @@ document.getElementById("tags").onclick = async () => {
 };
 document.getElementById("open").onclick = () => window.coat.openArchive();
 
+async function renderHistory() {
+  const el = document.getElementById("history");
+  const h = await window.coat.history(20);
+  if (!h || !h.ok || !h.data?.entries?.length) { el.textContent = "no history yet — rotate or save a wall"; return; }
+  const { port } = (await window.coat.status()).data;
+  el.innerHTML = `<div class="hist">${h.data.entries.map((e) => `
+    <div class="hist-row">
+      <img class="hist-thumb" src="http://127.0.0.1:${port}/history/${e.id}/preview" alt="" onerror="this.remove()"/>
+      <div class="hist-info">
+        <b>${esc(e.artist || "(unknown)")}</b> <span class="rate ${ratingClass(e.rating || "")}">${esc(e.rating || "?")}</span>
+        <div class="sub">${esc((e.filename || "").slice(0, 26))} · ${esc(e.source)} · ${e.score ?? "—"} pts</div>
+      </div>
+      <button class="hist-restore" data-id="${e.id}">↩ Restore</button>
+    </div>`).join("")}</div>`;
+  el.querySelectorAll(".hist-restore").forEach((b) => {
+    b.onclick = async () => {
+      const r = await window.coat.restore(Number(b.dataset.id));
+      if (r.ok) {
+        toast(`restored → ${r.data.wall.split(/[\\/]/).pop()}`);
+        renderStatus();
+        renderHistory();
+      } else toast(r.data?.error || "restore failed");
+    };
+  });
+}
+
 // live updates pushed from main on each action
-window.coat.onDaemonMsg((m) => { if (m && m.type === "changed") renderStatus(); });
+window.coat.onDaemonMsg((m) => { if (m && m.type === "changed") { renderStatus(); renderHistory(); } });
 
 renderStatus();
+renderHistory();

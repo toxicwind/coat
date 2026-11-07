@@ -14,6 +14,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readd
 import { join, extname } from "node:path";
 import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle } from "./win-set";
 import { buildTagCandidates, pickFirstUsable, postMeta, type E621Post, type WallMeta } from "./rotate-utils";
+import { HistoryDB, type HistorySource } from "./db";
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const HOME = process.env.HOME ?? "";
@@ -45,6 +46,33 @@ const state: CoatState = {
   intervalHours: loaded.intervalHours ?? Number(process.env.COAT_ROTATE_HOURS ?? 24),
 };
 const persist = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+// ── Persistent history DB ────────────────────────────────────────────────
+// SQLite at the coat state dir. On first open it ingests every prior archive/*
+// file so previous sessions become queryable, restorable history.
+const historyDb = new HistoryDB(join(STATE, "history.db"));
+const ingested = historyDb.ingestArchive(ARCHIVE, "rotate");
+if (ingested > 0) log("history DB seeded from previous archive", { rows: ingested, total: historyDb.count() });
+
+/** Record a wall event (rotate/save/restore) with its metadata into the DB. */
+function recordHistory(input: { path: string; source: HistorySource; meta?: WallMeta | null }) {
+  try {
+    const m = input.meta ?? null;
+    historyDb.insert({
+      path: input.path,
+      source: input.source,
+      artist: m?.artist ?? null,
+      score: m?.score ?? null,
+      rating: m?.rating ?? null,
+      postId: m?.id ?? null,
+      generalTags: m?.tags?.general,
+      sampleUrl: m?.sampleUrl ?? null,
+      fullUrl: m?.fullUrl ?? null,
+    });
+  } catch (e) {
+    log("history record failed", String(e));
+  }
+}
 
 /**
  * Rotation scheduler. Rebuilds the Cron to fire every `hours` hours on the hour
@@ -116,6 +144,39 @@ function syncWallchangerConfig() {
   }
 }
 
+/**
+ * Restore an archived wall as the desktop wallpaper. Copies the history file
+ * into WALLS_DIR as a fresh wall (so the current path is always on disk), sets
+ * it (Windows: via SPI; Linux: leaves to the ww lane) and records the restore.
+ */
+async function restoreWallFromHistory(id: number): Promise<{ ok: boolean; wall?: string; error?: string }> {
+  try {
+    const row = historyDb.get(id);
+    if (!row || !existsSync(row.path)) return { ok: false, error: "history entry not found or file missing" };
+    const ext = extname(row.path) || ".jpg";
+    const dest = join(WALLS_DIR, `restored-${id}${ext}`);
+    if (!existsSync(dest)) copyFileSync(row.path, dest);
+    if (IS_WIN) await setWallWindows(dest, { style: "Fill" });
+    state.lastWall = dest;
+    state.lastWallMeta = {
+      id: row.post_id ?? undefined,
+      artist: row.artist ?? "(unknown)",
+      score: row.score ?? 0,
+      rating: row.rating ?? "",
+      tags: { artist: [], general: row.tags ? (JSON.parse(row.tags) as string[]) : [], species: [], character: [], copyright: [], meta: [] },
+      sampleUrl: row.sample_url,
+      fullUrl: row.full_url ?? "",
+      ext,
+    };
+    persist();
+    recordHistory({ path: dest, source: "restore", meta: state.lastWallMeta });
+    log("restored wall", { id, wall: dest });
+    return { ok: true, wall: dest };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 300) };
+  }
+}
+
 /** Serve the current wallpaper image for the GUI preview. Read from a local file
  *  so the GUI never depends on an external CDN (CSP/CORS/hotlink-proof). */
 function serveCurrentWall(): Response {
@@ -148,6 +209,7 @@ function saveCurrentWall() {
     const dest = join(ARCHIVE, `${stamp}-saved${extname(current)}`);
     copyFileSync(current, dest);
     log("saved current to history", dest);
+    recordHistory({ path: dest, source: "save", meta: state.lastWallMeta });
     return { ok: true, archived: dest, source: current };
   } catch (e) {
     return { ok: false, error: String(e).slice(0, 300) };
@@ -214,6 +276,7 @@ async function rotateWall() {
       state.lastWallMeta = meta;
       state.lastError = null;
       persist();
+      recordHistory({ path: wall, source: "rotate", meta });
       log("rotated", { wall: state.lastWall, artist: meta?.artist, score: meta?.score, rotates: state.rotates });
       return { ok: true, wall: state.lastWall, meta };
     }
@@ -231,8 +294,23 @@ const server = Bun.serve({
   port: PORT,
   fetch(req) {
     const p = new URL(req.url).pathname;
-    if (p === "/status") return Response.json({ ...state, port: PORT, cron: rotateCron ? `0 */${state.intervalHours} * * *` : ROTATE_CRON, archive: ARCHIVE });
+    if (p === "/status") return Response.json({ ...state, port: PORT, cron: rotateCron ? `0 */${state.intervalHours} * * *` : ROTATE_CRON, archive: ARCHIVE, historyCount: historyDb.count() });
     if (p === "/wall") return serveCurrentWall();
+    if (p === "/history") return Response.json({ ok: true, total: historyDb.count(), entries: historyDb.list(Number(new URL(req.url).searchParams.get("limit") ?? 50), Number(new URL(req.url).searchParams.get("offset") ?? 0)) });
+    const hl = p.match(/^\/history\/(\d+)$/);
+    if (hl) { const row = historyDb.get(Number(hl[1])); return row ? Response.json({ ok: true, entry: row }) : Response.json({ ok: false, error: "not found" }, { status: 404 }); }
+    const hr = p.match(/^\/history\/(\d+)\/restore$/);
+    if (hr && req.method === "POST") return restoreWallFromHistory(Number(hr[1])).then((r) => Response.json(r, { status: r.ok ? 200 : 400 }));
+    const hp = p.match(/^\/history\/(\d+)\/preview$/);
+    if (hp) {
+      const row = historyDb.get(Number(hp[1]));
+      if (row && existsSync(row.path)) {
+        const buf = readFileSync(row.path);
+        const type = extname(row.path).toLowerCase() === ".png" ? "image/png" : extname(row.path).toLowerCase() === ".gif" ? "image/gif" : "image/jpeg";
+        return new Response(new Uint8Array(buf), { headers: { "Content-Type": type, "Cache-Control": "no-store" } });
+      }
+      return new Response("not found", { status: 404 });
+    }
     if (p === "/rotate" && req.method === "POST") return rotateWall().then((r) => Response.json(r, { status: r.ok ? 200 : 500 }));
     if (p === "/interval" && req.method === "POST") {
       return req.json().then((raw) => {

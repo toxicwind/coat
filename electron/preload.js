@@ -10,5 +10,7 @@ contextBridge.exposeInMainWorld("coat", {
   tags: () => ipcRenderer.invoke("coat:tags"),
   setTags: (tags) => ipcRenderer.invoke("coat:tags:set", tags),
   openArchive: () => ipcRenderer.invoke("coat:open"),
+  history: (limit) => ipcRenderer.invoke("coat:history", limit),
+  restore: (id) => ipcRenderer.invoke("coat:restore", id),
   onDaemonMsg: (cb) => ipcRenderer.on("coat:msg", (_e, payload) => cb(payload)),
 });
