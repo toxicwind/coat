@@ -13,10 +13,58 @@ export const STILL_EXTS: Record<string, true> = { jpg: true, jpeg: true, png: tr
 export interface E621Post {
   id?: number;
   file?: { url?: string | null; ext?: string };
-  score?: { total?: number };
+  score?: { total?: number; up?: number; down?: number };
+  rating?: "e" | "q" | "s" | "g" | string;
+  sample?: { url?: string | null };
+  tags?: {
+    artist?: string[];
+    general?: string[];
+    species?: string[];
+    character?: string[];
+    copyright?: string[];
+    meta?: string[];
+  };
 }
 
 export type UsablePost = E621Post & { file: { url: string; ext: string } };
+
+/**
+ * The metadata that gets saved with a wall and shown in the GUI / tray.
+ */
+export interface WallMeta {
+  id?: number;
+  artist: string;
+  score: number;
+  rating: string;
+  tags: { artist: string[]; general: string[]; species: string[]; character: string[]; copyright: string[]; meta: string[] };
+  sampleUrl: string | null;
+  fullUrl: string;
+  ext: string;
+}
+
+const RATING_LABEL: Record<string, string> = { g: "General", s: "Sensitive", q: "Questionable", e: "Explicit" };
+
+/** Build the display metadata for a fetched post (falls back to "(unknown)"). */
+export function postMeta(post: UsablePost): WallMeta {
+  const artist = (post.tags?.artist ?? []) as string[];
+  return {
+    id: post.id,
+    artist: artist[0] || "(unknown)",
+    score: post.score?.total ?? 0,
+    rating: RATING_LABEL[post.rating ?? ""] ?? (post.rating ?? ""),
+    tags: {
+      artist,
+      general: (post.tags?.general ?? []).slice(0, 12),
+      species: post.tags?.species ?? [],
+      character: post.tags?.character ?? [],
+      copyright: post.tags?.copyright ?? [],
+      meta: post.tags?.meta ?? [],
+    },
+    sampleUrl: post.sample?.url || null,
+    fullUrl: post.file.url,
+    ext: post.file.ext,
+  };
+}
 
 /**
  * Pick the first post that has a downloadable, still-image file. Videos

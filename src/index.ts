@@ -13,7 +13,7 @@ import { Cron } from "croner";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle } from "./win-set";
-import { buildTagCandidates, pickFirstUsable, type E621Post } from "./rotate-utils";
+import { buildTagCandidates, pickFirstUsable, postMeta, type E621Post, type WallMeta } from "./rotate-utils";
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const HOME = process.env.HOME ?? "";
@@ -32,12 +32,13 @@ mkdirSync(ARCHIVE, { recursive: true });
 mkdirSync(STATE, { recursive: true });
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[coat]", ...a);
 
-interface CoatState { lastRotate: string | null; lastWall: string | null; rotates: number; lastError: string | null; tags: string; intervalHours: number }
+interface CoatState { lastRotate: string | null; lastWall: string | null; lastWallMeta: WallMeta | null; rotates: number; lastError: string | null; tags: string; intervalHours: number }
 const statePath = join(STATE, "state.json");
 const loaded = existsSync(statePath) ? (JSON.parse(readFileSync(statePath, "utf8")) as Partial<CoatState>) : {};
 const state: CoatState = {
   lastRotate: loaded.lastRotate ?? null,
   lastWall: loaded.lastWall ?? null,
+  lastWallMeta: loaded.lastWallMeta ?? null,
   rotates: loaded.rotates ?? 0,
   lastError: loaded.lastError ?? null,
   tags: loaded.tags ?? DEFAULT_TAGS,
@@ -69,7 +70,7 @@ function setIntervalHours(hours: number) {
  * picked, and if a strict tag query returns an empty page, it falls back to the
  * score-stripped candidate so the rotate button never comes back dead.
  */
-async function fetchE621Wall(): Promise<string> {
+async function fetchE621Wall(): Promise<{ path: string; meta: WallMeta }> {
   const candidates = buildTagCandidates(state.tags);
   let lastErr = "no usable e621 post (bad tags/rating?)";
   for (const tags of candidates) {
@@ -88,8 +89,9 @@ async function fetchE621Wall(): Promise<string> {
       if (!img.ok) { lastErr = `e621 asset ${img.status}`; continue; }
       const buf = Buffer.from(await img.arrayBuffer());
       writeFileSync(out, buf);
-      log("fetched", { id: post.id, score: post.score?.total, file: name, bytes: buf.length, tags });
-      return out;
+      const meta = postMeta(post);
+      log("fetched", { id: post.id, artist: meta.artist, score: meta.score, file: name, bytes: buf.length, tags });
+      return { path: out, meta };
     } catch {
       /* try next candidate */
     }
@@ -155,10 +157,13 @@ async function rotateWall() {
     let setWall: (p: string) => Promise<unknown> = async () => {};
     const before = new Set(existsSync(WALLS_DIR) ? readdirSync(WALLS_DIR) : []);
     let fetched: string | null = null;
+    let meta: WallMeta | null = null;
 
     if (IS_WIN) {
       // Native lane: no bash/ww dependency. Fetch + set via Win32 SPI.
-      fetched = await fetchE621Wall();
+      const fetchedWall = await fetchE621Wall(); // { path, meta }
+      fetched = fetchedWall.path;
+      meta = fetchedWall.meta;
       // Correct scaling on the single (horizontal) monitor: smaller walls center
       // at native size, same-aspect walls fill/cover, mismatched contain/fit.
       const { w: monW, h: monH } = getWindowsDesktopSize();
@@ -187,10 +192,11 @@ async function rotateWall() {
       copyFileSync(wall, join(ARCHIVE, `${stamp}-wall${extname(wall)}`));
       if (IS_WIN) syncWallchangerConfig();
       state.lastWall = wall;
+      state.lastWallMeta = meta;
       state.lastError = null;
       persist();
-      log("rotated", { wall: state.lastWall, rotates: state.rotates });
-      return { ok: true, wall: state.lastWall };
+      log("rotated", { wall: state.lastWall, artist: meta?.artist, score: meta?.score, rotates: state.rotates });
+      return { ok: true, wall: state.lastWall, meta };
     }
     state.lastError = "wall missing after set";
     persist();

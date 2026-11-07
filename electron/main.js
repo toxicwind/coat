@@ -7,8 +7,8 @@
  * PowerShell tray did (rotate, auto-rotate interval, tags, save-to-history,
  * open archive). Auto-launches at login.
  */
-const { app, Tray, Menu, BrowserWindow, nativeImage, dialog } = require("electron");
-const { spawn } = require("child_process");
+const { app, Tray, Menu, BrowserWindow, nativeImage, ipcMain } = require("electron");
+const { spawn, execFile } = require("child_process");
 const { join } = require("path");
 const { existsSync } = require("fs");
 const http = require("http");
@@ -116,29 +116,54 @@ async function setInterval(hours) {
   else notify("coat · auto-rotate", "failed");
 }
 
-async function openTags() {
-  const cur = (await coat("GET", "/tags")).data?.tags ?? "";
-  const win = new BrowserWindow({
-    width: 480, height: 210, show: false, resizable: false,
-    webPreferences: { nodeIntegration: true, contextIsolation: false, sandbox: false }, // trusted local prompt
+let guiWin = null; // the single control-panel window
+
+function showGUI(focus = true) {
+  if (guiWin && !guiWin.isDestroyed()) {
+    if (focus) guiWin.focus();
+    return;
+  }
+  guiWin = new BrowserWindow({
+    width: 560, height: 560, show: false, resizable: true,
+    icon: app.isPackaged ? join(process.resourcesPath, "icon.png") : join(__dirname, "..", "..", "electron", "icon.png"),
+    backgroundColor: "#1a121c",
+    webPreferences: { contextIsolation: true, sandbox: true, preload: join(__dirname, "preload.js") },
   });
-  win.loadURL("data:text/html," + encodeURIComponent(tagPromptHtml(cur)));
-  win.once("ready-to-show", () => win.show());
-  win.setMenuBarVisibility(false);
+  guiWin.loadFile(join(__dirname, "gui", "index.html"));
+  guiWin.once("ready-to-show", () => guiWin.show());
+  guiWin.on("closed", () => (guiWin = null));
 }
 
-function tagPromptHtml(current) {
-  return `<!doctype html><html><body style="font-family:Segoe UI;padding:16px">
-    <h3 style="margin-top:0">e621 tags (search syntax)</h3>
-    <input id="t" style="width:100%;padding:6px;font-size:14px" value="${escapeHtml(current)}"/>
-    <div style="margin-top:12px"><button onclick="send()">Set & Rotate</button>
-    <button onclick="sendCancel()">Cancel</button></div>
-    <script>const {ipcRenderer}=require('electron');
-      function send(){ipcRenderer.send('tags-ok',document.getElementById('t').value);window.close();}
-      function sendCancel(){ipcRenderer.send('tags-cancel');window.close();}
-    </script></body></html>`;
+// IPC: every action calls the daemon over HTTP (no shell, no console).
+ipcMain.handle("coat:status", () => coat("GET", "/status"));
+ipcMain.handle("coat:rotate", () => coat("POST", "/rotate").then(r => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:save", () => coat("POST", "/save").then(r => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:interval", (_e, hours) => coat("POST", "/interval", { hours }).then(r => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:tags", () => coat("GET", "/tags"));
+ipcMain.handle("coat:tags:set", (_e, tags) => coat("POST", "/tags", { tags }).then(r => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:open", async () => { const s = await coat("GET", "/status"); if (s.ok && s.data?.archive) execFile("explorer.exe", [s.data.archive]); return { ok: true }; });
+
+function broadcastChanged() {
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send("coat:msg", { type: "changed" });
 }
-function escapeHtml(s){return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
+
+/** DEV hot-reload (COAT_DEV=1): reload the GUI + restart the daemon on file edits. */
+async function enableHotReload() {
+  if (process.env.COAT_DEV !== "1") return;
+  const { default: chokidar } = await import("chokidar"); // v4+ is ESM-only
+  const guiWatcher = chokidar.watch([join(__dirname, "gui"), join(__dirname, "preload.js")], { ignoreInitial: true });
+  guiWatcher.on("change", () => {
+    for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.webContents.reload(); }
+    console.log("[coat-dev] gui reloaded");
+  });
+  const srcWatcher = chokidar.watch(join(resolveCoatDir(), "src"), { ignoreInitial: true });
+  srcWatcher.on("change", () => {
+    if (daemon && !daemon.killed) { try { daemon.kill(); } catch {} }
+    daemon = null;
+    setTimeout(ensureDaemon, 300);
+    console.log("[coat-dev] daemon restarted");
+  });
+}
 
 function buildTray() {
   const i = new Tray(nativeImage.createEmpty());
@@ -166,44 +191,38 @@ function buildTray() {
   ]);
 
   i.setContextMenu(Menu.buildFromTemplate([
+    { label: "Open coat control panel", click: () => showGUI() },
+    { type: "separator" },
     { label: "Rotate now", click: doRotate },
     { label: "Auto-rotate every…", submenu: intervalMenu },
     { type: "separator" },
-    { label: "Search / set tags…", click: openTags },
     { label: "Save current to history", click: async () => (await coat("POST", "/save")).ok ? notify("coat · saved", "wall added to history") : notify("coat · save", "failed") },
-    { label: "Open history folder", click: async () => { const s = await coat("GET", "/status"); if (s.ok && s.data?.archive) require("child_process").exec(`explorer "${s.data.archive}"`); } },
+    { label: "Open history folder", click: async () => { const s = await coat("GET", "/status"); if (s.ok && s.data?.archive) execFile("explorer.exe", [s.data.archive]); } },
     { type: "separator" },
     { label: "Restart daemon", click: () => { if (daemon) { try { daemon.kill(); } catch {} } daemon = null; ensureDaemon(); notify("coat · daemon", "restarted"); } },
     { label: "Exit", click: () => app.quit() },
   ]));
+  i.on("double-click", () => showGUI());
 
   tray = i;
   return i;
 }
-
-// IPC for the tags prompt
-const { ipcMain } = require("electron");
-ipcMain.on("tags-ok", async (_e, tags) => { if (tags) { await coat("POST", "/tags", { tags }); await doRotate(); } });
-ipcMain.on("tags-cancel", () => {});
 
 // Single instance — only one tray/daemon.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  let hiddenWin = null; // held so the hidden window isn't GC'd
   app.whenReady().then(() => {
     // Auto-launch at login (replaces the old HKCU Run key).
     app.setLoginItemSettings({ openAtLogin: true });
-    // A hidden window gives the app a real handle without showing a console/UI.
-    hiddenWin = new BrowserWindow({ width: 1, height: 1, show: false });
+    // Don't open a window at boot unless flagged — the tray is the home.
     buildTray();
     ensureDaemon();
-    // Keep the daemon alive if the tray is closed on shutdown.
-    app.on("before-quit", () => { if (daemon && !daemon.killed) daemon.unref(); });
+    if (process.env.COAT_DEV === "1") { enableHotReload(); showGUI(); } // dev: hot-reload + open panel
+    else if (process.env.COAT_OPEN_GUI === "1") showGUI();
   });
   app.on("window-all-closed", () => {
     // Windows: keep running in the tray — do not quit when windows close.
   });
-  app.on("activate", () => { /* macOS convention, not used on Windows */ });
 }

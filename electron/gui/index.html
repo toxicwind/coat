@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https://*.e621.net https://e621.net; style-src 'self' 'unsafe-inline'" />
+<title>coat — the wallpaper lane</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI", system-ui, sans-serif; background:#1a121c; color:#f0e6d8; }
+  header { padding:18px 20px; background:linear-gradient(180deg,#2a1a24,#1a121c); border-bottom:1px solid #3a2634; display:flex; align-items:center; gap:12px; }
+  header img { width:34px; height:34px; border-radius:8px; }
+  header h1 { margin:0; font-size:17px; font-weight:600; }
+  header .sub { font-size:12px; color:#b89c8a; }
+  .wrap { padding:18px 20px; max-width:520px; }
+  .row { display:flex; gap:10px; align-items:center; margin:14px 0; flex-wrap:wrap; }
+  .btn { flex:1; min-width:150px; padding:12px; border:1px solid #4a3040; border-radius:10px; background:#2a1c28; color:#f0e6d8; font-size:14px; cursor:pointer; transition:background .15s, transform .05s; }
+  .btn:hover { background:#3a2636; }
+  .btn:active { transform:scale(.97); }
+  .btn .big { display:block; font-size:15px; font-weight:600; }
+  .btn .small { display:block; font-size:11px; color:#b89c8a; margin-top:2px; }
+  .stat { background:#201420; border:1px solid #341f2c; border-radius:10px; padding:12px 14px; margin:6px 0; font-size:12.5px; }
+  .stat b { color:#e8c89a; }
+  .badge { display:inline-block; background:#3a2634; color:#e8c89a; border-radius:999px; padding:2px 10px; font-size:11px; margin-left:8px; }
+  select { padding:8px; border-radius:8px; background:#241621; color:#f0e6d8; border:1px solid #4a3040; font-size:13px; }
+  #status { white-space:pre-wrap; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#3a2634; padding:8px 16px; border-radius:999px; font-size:12.5px; opacity:0; transition:opacity .3s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  /* current-wall card */
+  .wall { display:flex; gap:14px; background:linear-gradient(135deg,#2a1c28,#221622); border:1px solid #3d2834; border-radius:14px; padding:14px; align-items:flex-start; }
+  .wallimg { flex:0 0 46%; aspect-ratio:1/1; border-radius:10px; overflow:hidden; background:#150d17; border:1px solid #3a2230; display:flex; align-items:center; justify-content:center; }
+  .wallimg img { width:100%; height:100%; object-fit:contain; }
+  .noimg { color:#7a6270; font-size:12px; padding:14px; text-align:center; }
+  .wallmeta { flex:1; min-width:0; }
+  .artist { font-size:15px; color:#e8c89a; }
+  .artist b { color:#f5d9a8; }
+  .rate { display:inline-block; border-radius:999px; padding:1px 9px; font-size:11px; font-weight:700; margin-left:8px; }
+  .rate.g{background:#2f3d2f;color:#9fd39f}.rate.s{background:#3a3a2a;color:#e0d08a}.rate.q{background:#3a2f2a;color:#e0a08a}.rate.e{background:#402630;color:#eea0b8}.rate.u{background:#333;color:#aaa}
+  .scorerow { margin:6px 0 8px; display:flex; align-items:center; gap:10px; }
+  .score { color:#9fd39f; font-size:13px; font-weight:600; }
+  .eid { color:#7a6270; font-size:11px; }
+  .tags { display:flex; flex-wrap:wrap; gap:5px; }
+  .tag { border-radius:999px; padding:2px 9px; font-size:10.5px; }
+  .tag.a{background:#4a2f3a;color:#eab9d0}
+  .tag.s{background:#3a4630;color:#c3e0a8}
+  .tag.g{background:#2f2a3a;color:#c9b8e0}
+</style>
+</head>
+<body>
+<header>
+  <img id="icon" alt="" />
+  <div>
+    <h1>coat</h1>
+    <div class="sub">the kelpie's fur — e621 wallpaper lane</div>
+  </div>
+</header>
+<div class="wrap">
+  <div class="row">
+    <button class="btn" id="rotate"><span class="big">🎲 Rotate now</span><span class="small">fresh e621 wall → set + archive</span></button>
+    <button class="btn" id="save"><span class="big">💾 Save to history</span><span class="small">snapshot the current desktop</span></button>
+  </div>
+
+  <div class="stat">Auto-rotate every
+    <label class="badge"><select id="interval"></select></label>
+  </div>
+
+  <div class="row">
+    <button class="btn" id="tags"><span class="big">🏷 Search / set tags</span><span class="small">male/male score:>80…</span></button>
+    <button class="btn" id="open"><span class="big">🗂 History folder</span><span class="small">open the archive</span></button>
+  </div>
+
+  <div class="stat" id="status">loading…</div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="./renderer.js"></script>
+</body>
+</html>

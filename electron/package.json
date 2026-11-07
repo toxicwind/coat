@@ -7,21 +7,42 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --x64",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "dev": "node dev.mjs"
   },
   "devDependencies": {
+    "chokidar": "^5.0.0",
     "electron": "^33.4.11",
     "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "io.toxicwind.coat",
     "productName": "coat",
-    "files": ["main.js"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "gui/**"
+    ],
     "extraResources": [
-      { "from": "../src", "to": "daemon/src" },
-      { "from": "../package.json", "to": "daemon/package.json" },
-      { "from": "../bun.lock", "to": "daemon/bun.lock", "filter": ["*"] },
-      { "from": "icon.png", "to": "icon.png" }
+      {
+        "from": "../src",
+        "to": "daemon/src"
+      },
+      {
+        "from": "../package.json",
+        "to": "daemon/package.json"
+      },
+      {
+        "from": "../bun.lock",
+        "to": "daemon/bun.lock",
+        "filter": [
+          "*"
+        ]
+      },
+      {
+        "from": "icon.png",
+        "to": "icon.png"
+      }
     ],
     "win": {
       "target": "nsis",
