@@ -64,8 +64,20 @@ Right-click the "coat" tray icon for:
 - **Open history folder** — explore `pens/kelpie/docs/wallpaper-archive`
 - **Restart daemon** — ensure `:25240` is up
 
-Default search is **`male/male score:>80 -sexual -gore -comic`** (multi-male SFW).
+Default search is **`male/male score:>80 -gore -comic`** (multi-male, NSFW allowed).
 Change it any time via the tray "Tags…" dialog, `POST /tags`, or `COAT_E621_TAGS`.
+
+Windows specifics (all automatic):
+
+- **Randomized**: each rotate uses `order:random` + a pool, so the desktop changes
+  every time (not the same newest post).
+- **No black screens**: fetched walls are converted to BMP (`Wallpapers/current-wall.bmp`)
+  before setting — Windows' SPI always renders BMP, and the persistent file means
+  the wallpaper survives reboot.
+- **Single-monitor centering**: style is computed per-wall — same aspect as your
+  monitor → `Fill` (cover), different aspect → `Fit` (contain, centered). Works on
+  the single horizontal monitor without manual fiddling.
+- **SFW off by default**: `-sexual` was removed from the default search (NSFW male/male).
 
 coat keeps `%LocalAppData%\WallpaperSlideshow\config.json` pointed at
 `%USERPROFILE%\Wallpapers` (see `syncWallchangerConfig()` in `src/index.ts`).
