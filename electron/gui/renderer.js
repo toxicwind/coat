@@ -24,9 +24,12 @@ async function renderStatus() {
   if (!s || !s.ok) { el.textContent = "daemon not reachable — start coat"; return; }
   fillInterval(s.data.intervalHours);
   const m = s.data.lastWallMeta;
+  const port = s.data.port;
+  // Preview via the daemon's local /wall endpoint (localhost, hotlink/CSP-proof),
+  // falling back to the CDN sample only if the proxy has nothing yet.
   el.innerHTML = m ? `
     <div class="wall">
-      <div class="wallimg">${m.sampleUrl ? `<img src="${esc(m.sampleUrl)}" alt="wall"/>` : `<div class="noimg">${esc(m.ext||"").toUpperCase()}</div>`}</div>
+      <div class="wallimg">${m.sampleUrl ? `<img src="http://127.0.0.1:${port}/wall" alt="wall" onerror="this.onerror=null;this.src='${esc(m.sampleUrl)}';"/>` : `<div class="noimg">${esc(m.ext||"").toUpperCase()}</div>`}</div>
       <div class="wallmeta">
         <div class="artist">by <b>${esc(m.artist)}</b> <span class="rate ${ratingClass(m.rating)}">${esc(m.rating)}</span></div>
         <div class="scorerow"><span class="score">⬆ ${m.score}</span>${m.id ? `<span class="eid">post #${m.id}</span>` : ""}</div>

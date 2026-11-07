@@ -116,6 +116,25 @@ function syncWallchangerConfig() {
   }
 }
 
+/** Serve the current wallpaper image for the GUI preview. Read from a local file
+ *  so the GUI never depends on an external CDN (CSP/CORS/hotlink-proof). */
+function serveCurrentWall(): Response {
+  try {
+    // Prefer the Windows BMP that's actively displayed; else the last fetched wall.
+    const candidates = IS_WIN ? [join(WALLS_DIR, "current-wall.bmp")] : [];
+    if (state.lastWall) candidates.push(state.lastWall);
+    for (const c of candidates) {
+      if (c && existsSync(c)) {
+        const buf = readFileSync(c);
+        const ext = extname(c).toLowerCase();
+        const type = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : "image/jpeg";
+        return new Response(new Uint8Array(buf), { headers: { "Content-Type": type, "Cache-Control": "no-store" } });
+      }
+    }
+  } catch { /* fall through */ }
+  return new Response("no wall yet", { status: 404 });
+}
+
 /**
  * Save the CURRENT desktop wallpaper (whatever is on screen right now, even if
  * it was set outside coat) into the archive as a history entry.
@@ -213,6 +232,7 @@ const server = Bun.serve({
   fetch(req) {
     const p = new URL(req.url).pathname;
     if (p === "/status") return Response.json({ ...state, port: PORT, cron: rotateCron ? `0 */${state.intervalHours} * * *` : ROTATE_CRON, archive: ARCHIVE });
+    if (p === "/wall") return serveCurrentWall();
     if (p === "/rotate" && req.method === "POST") return rotateWall().then((r) => Response.json(r, { status: r.ok ? 200 : 500 }));
     if (p === "/interval" && req.method === "POST") {
       return req.json().then((raw) => {
