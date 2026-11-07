@@ -10,11 +10,12 @@
  */
 import { consola } from "consola";
 import { Cron } from "croner";
-import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, extname } from "node:path";
-import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle } from "./win-set";
+import { tmpdir } from "node:os";
 import { buildTagCandidates, pickFirstUsable, postMeta, type E621Post, type WallMeta } from "./rotate-utils";
 import { HistoryDB, type HistorySource } from "./db";
+import { setWallWindows, getCurrentWallWindows, imageDimensions, pickFitStyle, type PanAxis } from "./win-set";
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const HOME = process.env.HOME ?? "";
@@ -33,7 +34,7 @@ mkdirSync(ARCHIVE, { recursive: true });
 mkdirSync(STATE, { recursive: true });
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[coat]", ...a);
 
-interface CoatState { lastRotate: string | null; lastWall: string | null; lastWallMeta: WallMeta | null; rotates: number; lastError: string | null; tags: string; intervalHours: number }
+interface CoatState { lastRotate: string | null; lastWall: string | null; lastWallMeta: WallMeta | null; rotates: number; lastError: string | null; tags: string; intervalHours: number; pan: { x: PanAxis; y: PanAxis } }
 const statePath = join(STATE, "state.json");
 const loaded = existsSync(statePath) ? (JSON.parse(readFileSync(statePath, "utf8")) as Partial<CoatState>) : {};
 const state: CoatState = {
@@ -44,6 +45,7 @@ const state: CoatState = {
   lastError: loaded.lastError ?? null,
   tags: loaded.tags ?? DEFAULT_TAGS,
   intervalHours: loaded.intervalHours ?? Number(process.env.COAT_ROTATE_HOURS ?? 24),
+  pan: loaded.pan ?? { x: "center", y: "center" },
 };
 const persist = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
 
@@ -90,6 +92,83 @@ function setIntervalHours(hours: number) {
   if (process.env.COAT_NO_CRON) return;
   rotateCron = new Cron(`0 */${h} * * *`, { name: "e621-rotate" }, () => void rotateWall());
   log("interval updated", { hours: h, cron: `0 */${h} * * *` });
+}
+
+/** A single browseable search result for the GUI (thumbnail + full metadata). */
+export interface SearchResult extends WallMeta {
+  previewUrl: string | null;
+  postUrl: string;
+}
+
+/**
+ * /search — proxy a query to the e621 API and return a browseable result list
+ * (thumbnails + metadata) for the GUI. Each result is a still image with a
+ * sample URL; the caller uses `/preview` or the sample URL to render it.
+ */
+async function searchE621(req: Request): Promise<{ ok: boolean; query?: string; results?: SearchResult[]; error?: string }> {
+  try {
+    const body = (await req.json().catch(() => ({}))) as { q?: string; limit?: number };
+    const q = (body.q ?? "").trim();
+    if (!q) return { ok: false, error: "query required" };
+    const limit = Math.min(Number(body.limit ?? 24) || 24, 60);
+    const url = `https://e621.net/posts.json?limit=${limit}&tags=${encodeURIComponent(`${q} order:random`)}`;
+    const res = await fetch(url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
+    if (!res.ok) return { ok: false, error: `e621 ${res.status}` };
+    const data = (await res.json()) as { posts?: E621Post[] };
+    const results = (data.posts ?? []).map((p) => {
+      const post = pickFirstUsable([p]);
+      if (!post) return null;
+      const m = postMeta(post);
+      const postUrl = post.id ? `https://e621.net/posts/${post.id}` : m.fullUrl;
+      return { ...m, previewUrl: m.sampleUrl ?? m.fullUrl, postUrl };
+    }).filter((x): x is NonNullable<typeof x> => x !== null);
+    return { ok: true, query: q, results: results.slice(0, limit) };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 300) };
+  }
+}
+
+/**
+ * /wall/from-search — set a specific searched post as the wallpaper. Body carries
+ * a SearchResult: it downloads the full-res file, saves it, sets it (Windows
+ * SPI), records it in history, and updates current state/meta.
+ */
+async function setWallFromSearch(req: Request): Promise<{ ok: boolean; wall?: string; error?: string }> {
+  try {
+    const body = (await req.json().catch(() => ({}))) as Partial<SearchResult> & { url?: string };
+    const url = body.fullUrl || body.url;
+    if (!url) return { ok: false, error: "no image url" };
+    const res = await fetch(url, { headers: { "User-Agent": `coat/${process.env.npm_package_version ?? "0.1.0"} (kelpie)` } });
+    if (!res.ok) return { ok: false, error: `image ${res.status}` };
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ext = extname(new URL(url).pathname) || ".jpg";
+    const safe = new URL(url).pathname.split("/").pop()?.replace(/[^\w.\-]+/g, "_") || `wall-${Date.now()}`;
+    const out = join(WALLS_DIR, `${new Date().toISOString().slice(0, 10)}-${safe}`);
+    mkdirSync(WALLS_DIR, { recursive: true });
+    writeFileSync(out, buf);
+    const meta: WallMeta = {
+      id: body.id,
+      artist: body.artist ?? "(unknown)",
+      score: body.score ?? 0,
+      rating: body.rating ?? "",
+      tags: { artist: body.tags?.artist ?? [], general: body.tags?.general ?? [], species: body.tags?.species ?? [], character: [], copyright: [], meta: [] },
+      sampleUrl: body.sampleUrl ?? null,
+      fullUrl: url,
+      ext,
+    };
+    if (IS_WIN) {
+      const { w: monW, h: monH } = getWindowsDesktopSize();
+      await setWallWindows(out, { style: "Fill", cropToAspect: monW && monH ? monW / monH : undefined, pan: state.pan, tile: false });
+    }
+    state.lastWall = out;
+    state.lastWallMeta = meta;
+    persist();
+    recordHistory({ path: out, source: "restore", meta });
+    log("wall from search", { artist: meta.artist, file: out });
+    return { ok: true, wall: out };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 300) };
+  }
 }
 
 /**
@@ -156,7 +235,10 @@ async function restoreWallFromHistory(id: number): Promise<{ ok: boolean; wall?:
     const ext = extname(row.path) || ".jpg";
     const dest = join(WALLS_DIR, `restored-${id}${ext}`);
     if (!existsSync(dest)) copyFileSync(row.path, dest);
-    if (IS_WIN) await setWallWindows(dest, { style: "Fill" });
+    if (IS_WIN) {
+      const { w: monW, h: monH } = getWindowsDesktopSize();
+      await setWallWindows(dest, { style: "Fill", cropToAspect: monW && monH ? monW / monH : undefined, pan: state.pan, tile: false });
+    }
     state.lastWall = dest;
     state.lastWallMeta = {
       id: row.post_id ?? undefined,
@@ -222,12 +304,27 @@ function saveCurrentWall() {
  */
 function getWindowsDesktopSize(): { w: number; h: number } {
   try {
-    const out = Bun.spawnSync(
-      ["powershell", "-NoProfile", "-Command", "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class VM{[DllImport(\"user32.dll\")]public static extern int GetSystemMetrics(int);}' ; (New-Object VM).GetSystemMetrics(78).ToString()+' '+(New-Object VM).GetSystemMetrics(79)"],
-      { stdout: "pipe" },
-    ).stdout.toString();
-    const [w, h] = out.trim().split(/\s+/).map(Number);
-    if (w && h) return { w, h };
+    // Inline `Add-Type -TypeDefinition` with a one-line C# string fails ("Identifier
+    // expected") — write a proper .ps1 file (the same reason the setter does).
+    const dir = mkdtempSync(join(tmpdir(), "coat-monsize-"));
+    const ps = join(dir, "mon.ps1");
+    writeFileSync(ps, [
+      "Add-Type -TypeDefinition @'",
+      "using System;",
+      "using System.Runtime.InteropServices;",
+      "public static class VM {",
+      "  [DllImport(\"user32.dll\")] public static extern int GetSystemMetrics(int nIndex);",
+      "}",
+      "'@",
+      "Write-Output (([VM]::GetSystemMetrics(78)).ToString() + ' ' + ([VM]::GetSystemMetrics(79)).ToString())",
+    ].join("\n"), "utf8");
+    try {
+      const out = Bun.spawnSync(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps], { stdout: "pipe", windowsHide: true }).stdout.toString();
+      const [w, h] = out.trim().split(/\s+/).map(Number);
+      if (w && h) return { w, h };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   } catch { /* fall through */ }
   return { w: 0, h: 0 };
 }
@@ -250,8 +347,12 @@ async function rotateWall() {
       const { w: monW, h: monH } = getWindowsDesktopSize();
       const dims = imageDimensions(fetched);
       const fit = dims ? pickFitStyle(dims.w, dims.h, monW, monH) : { style: "Fill" as const, tile: "0" as const };
-      log("windows fit", { dims, monitor: `${monW}x${monH}`, style: fit.style, tile: fit.tile });
-      setWall = (p: string) => setWallWindows(p, { style: fit.style, tile: fit.tile === "1" });
+      log("windows fit", { dims, monitor: `${monW}x${monH}`, style: fit.style, pan: state.pan });
+      // Server-side crop to the exact monitor aspect (honoring user pan) so the
+      // wallpaper is always framed correctly — Windows 'Fill' has nothing left to
+      // mis-crop. Style Fill + cropToAspect == deterministic full-bleed result.
+      const cropToAspect = monW && monH ? monW / monH : undefined;
+      setWall = (p: string) => setWallWindows(p, { style: "Fill", cropToAspect, pan: state.pan, tile: false });
     } else {
       const proc = Bun.spawn(["bash", E621_SCRIPT], { stdout: "pipe", stderr: "pipe", env: { ...process.env, QUICKSHELL_CONFIG_NAME: "ww" } });
       const err = await new Response(proc.stderr).text();
@@ -295,8 +396,17 @@ const server = Bun.serve({
   fetch(req) {
     const p = new URL(req.url).pathname;
     if (p === "/status") return Response.json({ ...state, port: PORT, cron: rotateCron ? `0 */${state.intervalHours} * * *` : ROTATE_CRON, archive: ARCHIVE, historyCount: historyDb.count() });
+    if (p === "/pan" && req.method === "POST") return req.json().then((raw) => {
+      const b = (raw ?? {}) as { x?: string; y?: string };
+      if (b.x) { if (!["left","center","right"].includes(b.x)) return Response.json({ ok: false, error: "x must be left|center|right" }, { status: 400 }); state.pan.x = b.x as PanAxis; }
+      if (b.y) { if (!["top","center","bottom"].includes(b.y)) return Response.json({ ok: false, error: "y must be top|center|bottom" }, { status: 400 }); state.pan.y = b.y as PanAxis; }
+      persist();
+      return Response.json({ ok: true, pan: state.pan });
+    });
     if (p === "/wall") return serveCurrentWall();
-    if (p === "/history") return Response.json({ ok: true, total: historyDb.count(), entries: historyDb.list(Number(new URL(req.url).searchParams.get("limit") ?? 50), Number(new URL(req.url).searchParams.get("offset") ?? 0)) });
+    if (p === "/history" && req.method === "GET") return Response.json({ ok: true, total: historyDb.count(), entries: historyDb.list(Number(new URL(req.url).searchParams.get("limit") ?? 50), Number(new URL(req.url).searchParams.get("offset") ?? 0)) });
+    if (p === "/search" && req.method === "POST") return searchE621(req).then((r) => Response.json(r, { status: r.ok ? 200 : 400 }));
+    if (p === "/wall/from-search" && req.method === "POST") return setWallFromSearch(req).then((r) => Response.json(r, { status: r.ok ? 200 : 400 }));
     const hl = p.match(/^\/history\/(\d+)$/);
     if (hl) { const row = historyDb.get(Number(hl[1])); return row ? Response.json({ ok: true, entry: row }) : Response.json({ ok: false, error: "not found" }, { status: 404 }); }
     const hr = p.match(/^\/history\/(\d+)\/restore$/);

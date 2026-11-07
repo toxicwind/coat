@@ -23,6 +23,7 @@ async function renderStatus() {
   const el = document.getElementById("status");
   if (!s || !s.ok) { el.textContent = "daemon not reachable — start coat"; return; }
   fillInterval(s.data.intervalHours);
+  initPan(s.data.pan);
   const m = s.data.lastWallMeta;
   const port = s.data.port;
   // Preview via the daemon's local /wall endpoint (localhost, hotlink/CSP-proof),
@@ -57,6 +58,45 @@ document.getElementById("tags").onclick = async () => {
   renderStatus();
 };
 document.getElementById("open").onclick = () => window.coat.openArchive();
+
+// ── Search ──────────────────────────────────────────────────────────────
+async function runSearch() {
+  const q = document.getElementById("searchbox").value.trim();
+  if (!q) return;
+  const el = document.getElementById("results");
+  el.style.display = "block";
+  el.textContent = "searching…";
+  const { port } = (await window.coat.status()).data;
+  const res = await window.coat.search(q, 12);
+  if (!res.ok || !res.data?.results?.length) { el.textContent = res.data?.error || "no results"; return; }
+  el.innerHTML = `<div class="results">${res.data.results.map((r, i) => `
+    <div class="result" data-idx="${i}">
+      <img src="${esc(r.previewUrl)}" loading="lazy" alt=""/>
+      <div class="meta"><b>${esc(r.artist)}</b><span class="sub">· ${esc(r.rating)} · ${r.score}pts</span><span class="sub"> · #${r.id||""}</span></div>
+    </div>`).join("")}</div>`;
+  const results = res.data.results;
+  el.querySelectorAll(".result").forEach((card) => {
+    card.onclick = async () => {
+      const r = results[Number(card.dataset.idx)];
+      const set = await window.coat.setWallFromSearch({ ...r });
+      if (set.ok) { toast(`set → ${set.data.wall.split(/[\\/]/).pop()}`); renderStatus(); renderHistory(); }
+      else toast(set.data?.error || "set failed");
+    };
+  });
+}
+document.getElementById("searchbox").addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
+document.getElementById("searchgo").onclick = runSearch;
+
+// ── Pan control ─────────────────────────────────────────────────────────
+function initPan(current) {
+  const px = current?.x || "center", py = current?.y || "center";
+  const setBtn = (rowId, active) => {
+    document.querySelectorAll(`#${rowId} button`).forEach((b) => b.classList.toggle("on", b.dataset.v === active));
+  };
+  setBtn("panx", px); setBtn("pany", py);
+  document.querySelectorAll("#panx button").forEach((b) => { b.onclick = async () => { await window.coat.setPan(b.dataset.v, null); toast("wall cropped " + b.dataset.v); }; });
+  document.querySelectorAll("#pany button").forEach((b) => { b.onclick = async () => { await window.coat.setPan(null, b.dataset.v); toast("wall cropped " + b.dataset.v); }; });
+}
 
 async function renderHistory() {
   const el = document.getElementById("history");

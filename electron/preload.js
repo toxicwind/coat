@@ -12,5 +12,8 @@ contextBridge.exposeInMainWorld("coat", {
   openArchive: () => ipcRenderer.invoke("coat:open"),
   history: (limit) => ipcRenderer.invoke("coat:history", limit),
   restore: (id) => ipcRenderer.invoke("coat:restore", id),
+  search: (q, limit) => ipcRenderer.invoke("coat:search", q, limit),
+  setWallFromSearch: (result) => ipcRenderer.invoke("coat:wall-from-search", result),
+  setPan: (x, y) => ipcRenderer.invoke("coat:pan", x, y),
   onDaemonMsg: (cb) => ipcRenderer.on("coat:msg", (_e, payload) => cb(payload)),
 });

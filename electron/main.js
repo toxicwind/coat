@@ -144,6 +144,9 @@ ipcMain.handle("coat:tags:set", (_e, tags) => coat("POST", "/tags", { tags }).th
 ipcMain.handle("coat:open", async () => { const s = await coat("GET", "/status"); if (s.ok && s.data?.archive) execFile("explorer.exe", [s.data.archive]); return { ok: true }; });
 ipcMain.handle("coat:history", (_e, limit = 50) => coat("GET", `/history?limit=${limit}`));
 ipcMain.handle("coat:restore", (_e, id) => coat("POST", `/history/${id}/restore`).then((r) => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:search", (_e, q, limit = 24) => coat("POST", "/search", { q, limit }));
+ipcMain.handle("coat:wall-from-search", (_e, result) => coat("POST", "/wall/from-search", result).then((r) => { broadcastChanged(); return r; }));
+ipcMain.handle("coat:pan", (_e, x, y) => coat("POST", "/pan", { x, y }).then((r) => { broadcastChanged(); return r; }));
 
 function broadcastChanged() {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send("coat:msg", { type: "changed" });

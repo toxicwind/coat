@@ -91,6 +91,8 @@ export function pickFitStyle(imgW: number, imgH: number, monW = 0, monH = 0): Wa
   return { style: "Fill", tile: "0" };
 }
 
+export type PanAxis = "left" | "center" | "right" | "top" | "bottom";
+
 interface WinSetOpts {
   /** WallpaperStyle registry value name ("Fill", "Fit", "Stretch", "Tile", "Center", "Span"). */
   style?: WallStyle;
@@ -98,11 +100,17 @@ interface WinSetOpts {
   tile?: boolean;
   /** If true, wallpaper may exceed monitor bounds (Span) when style is Fit/Fill. */
   span?: boolean;
+  /** Target aspect ratio W/H to CROP the image to (server-side) before setting.
+   *  When set, the image is cover-cropped to exactly this aspect using `pan`,
+   *  so Windows "Fill" has nothing left to crop and the result is predictable. */
+  cropToAspect?: number;
+  /** Pan within the crop: x in left|center|right, y in top|center|bottom. */
+  pan?: { x: PanAxis; y: PanAxis };
   /** Timeout for the child powershell, ms. */
   timeoutMs?: number;
 }
 
-const SCRIPT = (path: string, style: string) => `
+const SCRIPT = () => `
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
@@ -113,17 +121,38 @@ public static class CW {
 }
 '@
 $path = [System.IO.Path]::GetFullPath($env:COAT_WALL)
-# Convert to BMP so SPI ALWAYS renders (JPEG/PNG path can go black). Same pixels,
-# BMP is the one format the shell draws reliably. Persist beside the source so the
-# registry path stays valid across reboots (we set from this BMP).
 $wallDir = [System.IO.Path]::GetDirectoryName($path)
 $tmp = [System.IO.Path]::Combine($wallDir, "current-wall.bmp")
 try {
   $img = [System.Drawing.Image]::FromFile($path)
-  $bmp = New-Object System.Drawing.Bitmap -ArgumentList $img
+  $tgtAspect = $null
+  if ($env:COAT_ASPECT) { [double]$tgtAspect = [double]::Parse($env:COAT_ASPECT, [Globalization.CultureInfo]::InvariantCulture) }
+  if ($tgtAspect -gt 0) {
+    # Cover-crop the source to exactly the target aspect, honoring pan.
+    $sw = $img.Width; $sh = $img.Height
+    $srcAspect = [double]$sw / [double]$sh
+    $cropW = 0; $cropH = 0
+    if ([Math]::Abs($srcAspect - $tgtAspect) -lt 0.0001) { $cropW = $sw; $cropH = $sh }
+    elseif ($srcAspect -gt $tgtAspect) { $cropH = $sh; $cropW = [int][Math]::Floor($sh * $tgtAspect) }
+    else { $cropW = $sw; $cropH = [int][Math]::Floor($sw / $tgtAspect) }
+    $px = if ($env:COAT_PAN_X -eq 'left') { 0 } elseif ($env:COAT_PAN_X -eq 'right') { $sw - $cropW } else { [int](($sw - $cropW) / 2) }
+    $py = if ($env:COAT_PAN_Y -eq 'top') { 0 } elseif ($env:COAT_PAN_Y -eq 'bottom') { $sh - $cropH } else { [int](($sh - $cropH) / 2) }
+    $px = [Math]::Max(0, [Math]::Min($px, $sw - $cropW))
+    $py = [Math]::Max(0, [Math]::Min($py, $sh - $cropH))
+    $cropRect = New-Object System.Drawing.Rectangle($px, $py, $cropW, $cropH)
+    $bmp = New-Object System.Drawing.Bitmap($cropW, $cropH)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.DrawImage($img, (New-Object System.Drawing.Rectangle(0,0,$cropW,$cropH)), $cropRect, [System.Drawing.GraphicsUnit]::Pixel)
+    $g.Dispose()
+    $img.Dispose()
+  } else {
+    $bmp = New-Object System.Drawing.Bitmap -ArgumentList $img
+    $img.Dispose()
+  }
   $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Bmp)
-  $img.Dispose(); $bmp.Dispose()
-} catch { throw "bmp convert failed: $_" }
+  $bmp.Dispose()
+} catch { throw "convert/crop failed: $_" }
 try {
   $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Control Panel\\Desktop', $true)
   if ($key) {
@@ -135,8 +164,6 @@ try {
   }
 } catch { }
 $r = [CW]::SystemParametersInfo(0x0014, 0, $tmp, 0x01 -bor 0x02)
-# BMP intentionally kept at <wall dir>/current-wall.bmp so the registry path is
-# stable across reboots; the next rotate overwrites it.
 if ($r -eq 0) { throw "SystemParametersInfo failed (SetLastError=$([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
 Write-Output "OK:$path"
 `;
@@ -175,12 +202,23 @@ export function setWallWindows(wallPath: string, opts?: WinSetOpts): Promise<str
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   const dir = mkdtempSync(join(tmpdir(), "coat-win-"));
   const ps = join(dir, "set.ps1");
-  writeFileSync(ps, SCRIPT(full, style), "utf8");
+  writeFileSync(ps, SCRIPT(), "utf8");
 
   const child = spawn(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps],
-    { env: { ...process.env, COAT_WALL: full, COAT_STYLE: style, COAT_TILE: opts?.tile ? "1" : "0" }, windowsHide: true },
+    {
+      env: {
+        ...process.env,
+        COAT_WALL: full,
+        COAT_STYLE: style,
+        COAT_TILE: opts?.tile ? "1" : "0",
+        COAT_ASPECT: opts?.cropToAspect ? String(opts.cropToAspect) : "",
+        COAT_PAN_X: opts?.pan?.x ?? "center",
+        COAT_PAN_Y: opts?.pan?.y ?? "center",
+      },
+      windowsHide: true,
+    },
   );
 
   let out = "";

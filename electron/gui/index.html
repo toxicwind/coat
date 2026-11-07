@@ -54,6 +54,22 @@
   .hist-info .sub { color:#8a7080; font-size:10.5px; }
   .hist-restore { padding:5px 12px; border-radius:6px; border:1px solid #4a3040; background:#2a1c28; color:#f0e6d8; font-size:11.5px; cursor:pointer; }
   .hist-restore:hover { background:#3a2636; }
+  .search { align-items:stretch; }
+  .searchbox { flex:1; padding:11px 12px; border-radius:9px; border:1px solid #4a3040; background:#241621; color:#f0e6d8; font-size:14px; min-width:0; }
+  .searchbox:focus { outline:none; border-color:#8a5a70; }
+  .searchbtn { flex:0 0 auto; min-width:0; padding:11px 18px; }
+  .panrow { display:flex; align-items:center; gap:12px; }
+  .panlabel { color:#b89c8a; font-size:12px; font-weight:600; min-width:30px; }
+  .seg { display:flex; gap:6px; }
+  .seg button { padding:5px 12px; border-radius:6px; border:1px solid #3a2634; background:#18101a; color:#a89098; font-size:11.5px; cursor:pointer; }
+  .seg button.on { background:#4a2f3a; color:#eab9d0; border-color:#6a3a52; }
+  .results { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  .result { cursor:pointer; border-radius:10px; overflow:hidden; background:#18101a; border:1px solid #2a1c28; transition:border-color .15s, transform .05s; }
+  .result:hover { border-color:#6a3a52; transform:translateY(-1px); }
+  .result img { width:100%; aspect-ratio:1.6/1; object-fit:cover; background:#120b13; }
+  .result .meta { padding:7px 9px; font-size:10.5px; }
+  .result .meta b { color:#e8c89a; font-size:11.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .result .meta .sub { color:#8a7080; }
 </style>
 </head>
 <body>
@@ -80,6 +96,22 @@
   </div>
 
   <div class="stat" id="status">loading…</div>
+
+  <div class="section-title">🔍 Search e621</div>
+  <div class="row search">
+    <input id="searchbox" class="searchbox" type="text" placeholder="tags… e.g. male/male score:>90" />
+    <button class="btn searchbtn" id="searchgo">Search</button>
+  </div>
+  <div class="stat panrow" id="panctl">
+    <span class="panlabel">Pan</span>
+    <div class="seg" id="pany">
+      <button data-v="top">top</button><button data-v="center" class="on">center</button><button data-v="bottom">bottom</button>
+    </div>
+    <div class="seg" id="panx">
+      <button data-v="left">left</button><button data-v="center" class="on">center</button><button data-v="right">right</button>
+    </div>
+  </div>
+  <div class="stat" id="results" style="display:none"></div>
 
   <div class="section-title">🕘 History</div>
   <div class="stat" id="history">loading history…</div>
