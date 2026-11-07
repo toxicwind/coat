@@ -58,11 +58,16 @@ scripts\coat-tray.cmd            :: start the tray icon
 Right-click the "coat" tray icon for:
 
 - **Rotate now** — fresh e621 wall (set + archive)
-- **Search / set tags…** — type e621 tag syntax to search (e.g. `male/male score:>80
-  -sexual`); it sets the daemon's tags and asks if you want to rotate with them
+- **Auto-rotate every…** — pick **3h / 6h / 12h** (also 1h/24h/Off); re-schedules the
+  daemon cron live (persisted, shown in `/status`)
+- **Search / set tags…** — type e621 tag syntax to search (e.g. `male/male score:>80`);
+  it sets the daemon's tags and asks if you want to rotate with them
 - **Save current to history** — snapshot whatever is on screen into the archive
 - **Open history folder** — explore `pens/kelpie/docs/wallpaper-archive`
 - **Restart daemon** — ensure `:25240` is up
+
+The rotation interval is also settable via `POST /interval {"hours": N}` or started
+from `COAT_ROTATE_HOURS`.
 
 Default search is **`male/male score:>80 -gore -comic`** (multi-male, NSFW allowed).
 Change it any time via the tray "Tags…" dialog, `POST /tags`, or `COAT_E621_TAGS`.
@@ -74,9 +79,10 @@ Windows specifics (all automatic):
 - **No black screens**: fetched walls are converted to BMP (`Wallpapers/current-wall.bmp`)
   before setting — Windows' SPI always renders BMP, and the persistent file means
   the wallpaper survives reboot.
-- **Single-monitor centering**: style is computed per-wall — same aspect as your
-  monitor → `Fill` (cover), different aspect → `Fit` (contain, centered). Works on
-  the single horizontal monitor without manual fiddling.
+- **Single-monitor scaling** (auto, per-wall): small art (<75% of the desktop) →
+  `Center` at native size (no upscale); portrait/tall posts → `Fit` (whole art,
+  side bars); landscape/square big enough → `Fill` (cover, fills the 1707×1067
+  screen). Wired via `imageDimensions()` + `pickFitStyle()`.
 - **SFW off by default**: `-sexual` was removed from the default search (NSFW male/male).
 
 coat keeps `%LocalAppData%\WallpaperSlideshow\config.json` pointed at
