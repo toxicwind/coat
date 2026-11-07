@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.coat-state/
+dist/
+obj/
+bin/

@@ -5,7 +5,9 @@
   "type": "module",
   "description": "coat — what you SEE: the kelpie's fur. Two surfaces: the wallpaper lane (e621 rotation, palette grooming, wall archive) + aesthetic pages (when text doesn't fit, serve a beautiful dark HTML page). One daemon, the look of the estate.",
   "license": "MIT",
-  "engines": { "bun": ">=1.4.3" },
+  "engines": {
+    "bun": ">=1.4.3"
+  },
   "scripts": {
     "start": "bun run src/index.ts",
     "rotate": "bun run src/index.ts --rotate",
@@ -16,5 +18,8 @@
     "croner": "^9.1.0",
     "consola": "^3.4.2"
   },
-  "keywords": ["wallpaper", "e621", "palette", "aesthetic-pages", "kelpie"]
+  "keywords": ["wallpaper", "e621", "palette", "aesthetic-pages", "kelpie"],
+  "devDependencies": {
+    "@types/bun": "^1.4.4"
+  }
 }
