@@ -1,0 +1,3 @@
+[submodule "wallchanger"]
+	path = wallchanger
+	url = https://github.com/toxicwind/wallchanger.git
