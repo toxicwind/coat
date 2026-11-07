@@ -17,6 +17,11 @@
     "appId": "io.toxicwind.coat",
     "productName": "coat",
     "files": ["main.js"],
+    "extraResources": [
+      { "from": "../src", "to": "daemon/src" },
+      { "from": "../package.json", "to": "daemon/package.json" },
+      { "from": "../bun.lock", "to": "daemon/bun.lock", "filter": ["*"] }
+    ],
     "win": {
       "target": "nsis",
       "artifactName": "coat-setup.exe"

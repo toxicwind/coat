@@ -10,12 +10,40 @@
 const { app, Tray, Menu, BrowserWindow, nativeImage, dialog } = require("electron");
 const { spawn } = require("child_process");
 const { join, dirname } = require("path");
+const { existsSync } = require("fs");
+const os = require("os");
 const http = require("http");
 const fs = require("fs");
 
 const PORT = Number(process.env.COAT_PORT ?? 25240);
 const BASE = `http://127.0.0.1:${PORT}`;
-const COAT_DIR = process.env.COAT_DIR ?? join(__dirname, "..");
+
+/**
+ * Locate the coat daemon source. In dev that's ../../ from electron/ (the coat
+ * checkout). In a packaged build it's under process.resourcesPath/app.asar if we
+ * bundle src/ via extraResources, else fall back to the dev checkout path.
+ */
+function resolveCoatDir() {
+  if (process.env.COAT_DIR && existsSync(process.env.COAT_DIR)) return process.env.COAT_DIR;
+  const dev = join(__dirname, "..", ".."); // electron/ ../ .. = coat checkout
+  if (existsSync(join(dev, "src", "index.ts"))) return dev;
+  const bundled = app.isPackaged ? join(process.resourcesPath, "daemon") : join(__dirname, "..", "daemon");
+  if (existsSync(join(bundled, "src", "index.ts"))) return bundled;
+  return dev; // best effort
+}
+const COAT_DIR = resolveCoatDir();
+
+/** Resolve the bun executable (PATH first, then common installs). */
+function resolveBun() {
+  if (process.env.BUN_PATH && existsSync(process.env.BUN_PATH)) return process.env.BUN_PATH;
+  const cands = [
+    "bun",
+    join(process.env.USERPROFILE || "", ".bun", "bin", "bun.exe"),
+    join(process.env.LOCALAPPDATA || "", "bun", "bun.exe"),
+    "C:\\ProgramData\\chocolatey\\bin\\bun.exe",
+  ];
+  return cands.find((c) => c === "bun" || existsSync(c)) || "bun";
+}
 
 /** Simple JSON GET/POST to the coat daemon. */
 function coat(method, path, body) {
@@ -43,9 +71,9 @@ let daemon; // the hidden bun child
 
 function ensureDaemon() {
   if (daemon && !daemon.killed) return;
-  const bunPath = process.env.BUN_PATH || "bun";
+  const bunPath = resolveBun();
   daemon = spawn(bunPath, ["run", "src/index.ts"], {
-    cwd: COAT_DIR,
+    cwd: resolveCoatDir(),
     windowsHide: true,          // no console window for the daemon
     detached: true,             // independent of Electron's lifecycle
     stdio: "ignore",
