@@ -8,7 +8,7 @@
  * open archive). Auto-launches at login.
  */
 const { app, Tray, Menu, BrowserWindow, nativeImage, ipcMain } = require("electron");
-const { spawn, execFile } = require("child_process");
+const { spawn, execFile, execSync } = require("child_process");
 const { join } = require("path");
 const { existsSync } = require("fs");
 const http = require("http");
@@ -24,7 +24,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
  */
 function resolveCoatDir() {
   if (process.env.COAT_DIR && existsSync(process.env.COAT_DIR)) return process.env.COAT_DIR;
-  const dev = join(__dirname, "..", ".."); // electron/ ../ .. = coat checkout
+  const dev = join(__dirname, ".."); // electron/ .. = the coat checkout root
   if (existsSync(join(dev, "src", "index.ts"))) return dev;
   const bundled = app.isPackaged ? join(process.resourcesPath, "daemon") : join(__dirname, "..", "daemon");
   if (existsSync(join(bundled, "src", "index.ts"))) return bundled;
@@ -170,6 +170,50 @@ async function enableHotReload() {
   });
 }
 
+/**
+ * Register coat to auto-launch at login, and make sure it actually loads the
+ * app when it does.
+ *
+ * The plain `setLoginItemSettings({ openAtLogin: true })` registers ONLY the
+ * executable on Windows — for a dev run that's the bare `node_modules\...\electron.exe`,
+ * and at login Electron starts up with no app path and prints:
+ *
+ *   "coat: electron did not auto load apps on startup
+ *    To run a local app, execute ... electron.exe path-to-app"
+ *
+ * It then exits, so coat never appears. The fix: always pass the app path as an
+ * explicit arg (and in dev, point at the binary that owns this app). Two stale
+ * Run keys also get cleaned up: a bare `electron.app.Electron` entry and a
+ * `electron.app.coat` entry whose `coat.exe` no longer exists.
+ */
+function registerAutoLaunch() {
+  const exe = process.execPath; // dev: node_modules\electron\dist\electron.exe; packaged: coat.exe
+  const appDir = app.getAppPath(); // dev: the electron/ dir holding main.js; packaged: inside asar
+
+  // In dev we MUST hand Electron the app path or it boots bare. In a packaged
+  // build the exe already embeds the app, so no arg is needed (and an arg would
+  // be treated as another app path — wrong).
+  const isPackaged = app.isPackaged;
+  const args = isPackaged ? [] : [appDir];
+
+  app.setLoginItemSettings({ openAtLogin: true, path: exe, args });
+
+  // Clean up stale/broken counterparts so login doesn't also fire a bare
+  // Electron or a phantom coat.exe.
+  const runKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+  const appId = app.isPackaged ? "coat" : "Electron"; // the registry value name Electron derives
+  try {
+    // If we're packaged, kill the stale dev Electron entry; if dev, the stale
+    // old coat entry whose exe no longer exists.
+    const staleName = isPackaged ? "electron.app.Electron" : "electron.app.coat";
+    execSync(`reg delete "${runKey}" /v "${staleName}" /f`, { windowsHide: true, stdio: "ignore" });
+    console.log(`[coat] removed stale auto-launch key ${staleName}`);
+  } catch {
+    // not present — fine
+  }
+  console.log(`[coat] auto-launch: ${exe}${args.length ? " " + JSON.stringify(args) : ""} (${appId})`);
+}
+
 function buildTray() {
   const i = new Tray(nativeImage.createEmpty());
   // Bundle icon.png as an extraResource so the tray uses the real generated mark.
@@ -219,8 +263,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.whenReady().then(() => {
-    // Auto-launch at login (replaces the old HKCU Run key).
-    app.setLoginItemSettings({ openAtLogin: true });
+    registerAutoLaunch();
     // Don't open a window at boot unless flagged — the tray is the home.
     buildTray();
     ensureDaemon();
